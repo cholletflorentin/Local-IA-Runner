@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   release:
-    if: github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch && (github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, '[publish-release]'))
+    if: github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch && (github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, '[publish-release]') || startsWith(github.event.head_commit.message, '[fix-release-notes]'))
     runs-on: windows-latest
 
     steps:
@@ -22,9 +22,19 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Build installer and portable package
+        if: ${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, '[fix-release-notes]') }}
         shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $versionNumber = [int]$env:GITHUB_RUN_NUMBER + 14
+          $releaseListOutput = gh release list --limit 100 --json tagName
+          if ($LASTEXITCODE -ne 0) { throw "Unable to list GitHub releases." }
+          $releases = @($releaseListOutput | ConvertFrom-Json)
+          $versionNumbers = @($releases | ForEach-Object {
+            if ($_.tagName -match '^v1\.0\.(\d+)$') { [int]$Matches[1] }
+          })
+          if ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
+          else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
           $version = "1.0.$versionNumber"
           & .\WinFormsApp\Installer\build-installer.ps1 -AppVersion $version
           if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
@@ -36,7 +46,43 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $versionNumber = [int]$env:GITHUB_RUN_NUMBER + 14
+          $releaseListOutput = gh release list --limit 100 --json tagName
+          if ($LASTEXITCODE -ne 0) { throw "Unable to list GitHub releases." }
+          $releases = @($releaseListOutput | ConvertFrom-Json)
+          $commitMessage = git log -1 --format=%s
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit message." }
+
+          if ($commitMessage.StartsWith('[fix-release-notes]')) {
+            foreach ($release in $releases) {
+              if ($release.tagName -notmatch '^v1\.0\.\d+$') { continue }
+              $version = $release.tagName.Substring(1)
+              $notes = @"
+          ## Nouveautés de Local IA Runner $version
+
+          Cette version ajoute la gestion des images générées dans les projets de code. Le modèle peut lister les images du dossier de sortie configuré, les copier dans son projet, ou les renommer et déplacer dans le dossier d'images ou le projet. Les opérations restent limitées à ces dossiers et ne remplacent pas les fichiers existants.
+
+          Les délais sont réglables dans les paramètres, section **Délais des outils** : délai d'inactivité de génération et durée maximale d'exécution Python.
+
+          L'application exécute localement les modèles de texte GGUF avec llama.cpp et génère des images avec stable-diffusion.cpp. Elle comprend les moteurs Windows x64, sans inclure les modèles IA.
+
+          ## Téléchargements
+
+          - `LocalIARunner-Setup-x64.exe` : installateur Windows 10/11 x64.
+          - `LocalIARunner-Portable-x64-$version.zip` : version portable à extraire et lancer, sans installation.
+
+          Les modèles doivent être téléchargés séparément ou déjà présents sur l'ordinateur. L'interface est en français.
+          "@
+              gh release edit $release.tagName --title "Local IA Runner $version" --notes $notes
+              if ($LASTEXITCODE -ne 0) { throw "Unable to update release notes for $($release.tagName)." }
+            }
+            exit 0
+          }
+
+          $versionNumbers = @($releases | ForEach-Object {
+            if ($_.tagName -match '^v1\.0\.(\d+)$') { [int]$Matches[1] }
+          })
+          if ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
+          else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
           $version = "1.0.$versionNumber"
           $tag = "v$version"
           $installer = "artifacts\installer\LocalIARunner-Setup-x64.exe"
@@ -60,9 +106,7 @@ jobs:
           Build du commit $env:GITHUB_SHA.
           "@
 
-          $releaseListOutput = gh release list --limit 100 --json tagName
-          if ($LASTEXITCODE -ne 0) { throw "Unable to list GitHub releases." }
-          $existingRelease = @($releaseListOutput | ConvertFrom-Json) | Where-Object { $_.tagName -eq $tag }
+          $existingRelease = $releases | Where-Object { $_.tagName -eq $tag }
 
           if ($existingRelease) {
             gh release upload $tag $installer $portable --clobber
