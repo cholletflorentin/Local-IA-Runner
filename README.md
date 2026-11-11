@@ -39,16 +39,16 @@ Pour développer et lancer directement depuis les sources, compiler `WinFormsApp
 ## Utilisation
 
 1. Pour discuter, choisir le dossier contenant les modèles GGUF, sélectionner un fichier `.gguf` puis envoyer un message.
-2. Pour générer une image, ouvrir **Outils → Générer une image…**, choisir le dossier de modèles stable-diffusion.cpp puis cliquer sur **Analyser les modèles**.
+2. Pour générer une image, ouvrir **Outils > Générer une image**, choisir le dossier de modèles stable-diffusion.cpp puis cliquer sur **Analyser les modèles**.
 3. Choisir un profil et ses composants, écrire un prompt et régler les dimensions, le nombre d'étapes et le guidage. L'application affiche la progression, permet d'annuler et enregistre l'image dans le dossier de sortie choisi.
 
 Les modèles d'images (`.safetensors`, `.gguf`, `.sft`, `.ckpt`, `.pt`, `.pth` et `.bin`) sont recherchés dans les catégories reconnues par stable-diffusion.cpp, comme `checkpoints`, `diffusion_models`, `text_encoders` et `vae`, y compris dans leurs sous-dossiers. Les fichiers de modèle posés directement à la racine d'un dossier sélectionné sont aussi détectés sans être déplacés ni copiés. L'application affiche le chemin relatif et sélectionne automatiquement un profil compatible avec les fichiers trouvés. Les moteurs fournis sont placés à côté de l'application dans `stable-diffusion.cpp\windows-vulkan` et `stable-diffusion.cpp\windows-cpu`; les modèles et images restent dans les dossiers choisis par l'utilisateur. Les fichiers `.mmproj` du navigateur de modèles de chat sont des projecteurs multimodaux auxiliaires, pas des modèles principaux; ils sont ignorés et ne peuvent pas être chargés seuls.
 
-Dans **Outils → Paramètres → Modèles par défaut**, tu peux choisir le fichier GGUF utilisé au démarrage et le fichier du modèle d'image à privilégier. Pour l'image, place le fichier dans une catégorie reconnue sous le dossier stable-diffusion.cpp; à l'analyse, l'application choisit un profil compatible et présélectionne ce fichier dans son composant.
+Dans **Outils / Paramètres / Modèles par défaut**, tu peux choisir le fichier GGUF utilisé au démarrage et le fichier du modèle d'image à privilégier. Pour l'image, place le fichier dans une catégorie reconnue sous le dossier stable-diffusion.cpp; à l'analyse, l'application choisit un profil compatible et présélectionne ce fichier dans son composant.
 
 ## Appels d'outils par les modèles
 
-Les outils web, code et génération d'images sont décrits dans les consignes système ajoutées au modèle pour chaque requête. Si un modèle d'image par défaut est défini dans **Outils → Paramètres → Modèles par défaut**, le modèle de texte peut appeler `generate_image` : il rédige le prompt positif et négatif et choisit les dimensions, étapes, guidage et graine. Le backend sélectionne le profil compatible avec le modèle par défaut, enregistre l'image dans `Pictures\LocalIARunner` et ajoute un lien pour l'ouvrir. Sans modèle d'image par défaut, cet outil n'est pas proposé.
+Les outils web, code et génération d'images sont décrits dans les consignes système ajoutées au modèle pour chaque requête. Si un modèle d'image par défaut est défini dans **Outils / Paramètres / Modèles par défaut**, le modèle de texte peut appeler `generate_image` : il rédige le prompt positif et négatif et choisit les dimensions, étapes, guidage et graine. Le backend sélectionne le profil compatible avec le modèle par défaut, enregistre l'image dans `Pictures\LocalIARunner` et ajoute un lien pour l'ouvrir. Sans modèle d'image par défaut, cet outil n'est pas proposé.
 
 Un appel d'outil est exécuté uniquement si la sortie complète du modèle contient un seul bloc d'outil, sans texte avant ni après. Le modèle peut utiliser une balise ou la syntaxe d'appel de fonction `web_search({"query":"..."})` :
 
@@ -60,28 +60,23 @@ Un appel accompagné d'une phrase est affiché comme texte et n'est pas exécut�
 
 Quand ces outils sont autorisés, le modèle peut utiliser `list_images` pour parcourir le dossier de sortie configuré dans la fenêtre de génération d'images (par défaut `Pictures\LocalIARunner`), `copy_image` pour copier une image générée dans le dossier du projet et `move_image` pour la renommer/déplacer dans le dossier des images ou vers le projet. Les chemins sont relatifs à ces deux dossiers, les fichiers existants ne sont pas remplacés et les images ne peuvent pas sortir de ces emplacements. Après copie dans le projet, le modèle peut référencer l'image dans son code, par exemple `assets/image.png`.
 
-Dans **Outils → Paramètres → Délais des outils**, tu peux régler le délai d'inactivité d'une génération (30 secondes à 2 heures, 900 secondes par défaut) ainsi que le temps maximal accordé à un script Python (1 seconde à 2 heures, 30 secondes par défaut). L'activité du modèle et la progression des outils réinitialisent le délai d'inactivité.
+Dans **Outils / Paramètres / Délais des outils**, tu peux régler le délai d'inactivité d'une génération (30 secondes à 2 heures, 900 secondes par défaut) ainsi que le temps maximal accordé à un script Python (1 seconde à 2 heures, 30 secondes par défaut). L'activité du modèle et la progression des outils réinitialisent le délai d'inactivité.
 
 ## Structure
 
 ```text
 LocalAIApp/
-├── .github/
-│   └── workflows/
-│       └── release.yml
-├── install.bat
-├── compile.bat
-├── launch.bat
-├── WinFormsApp/
-│   ├── LocalAIApp.csproj
-│   ├── Program.cs
-│   ├── MainForm.cs
-│   ├── ImageGeneratorForm.cs
-│   └── Installer/
-│       ├── build-installer.ps1
-│       ├── setup.iss
-│       ├── THIRD-PARTY-NOTICES.txt
-│       └── licenses/
-└── PythonBackend/
-    └── ai_backend.py
+  .github/workflows/release.yml
+  install.bat
+  compile.bat
+  launch.bat
+  WinFormsApp/LocalAIApp.csproj
+  WinFormsApp/Program.cs
+  WinFormsApp/MainForm.cs
+  WinFormsApp/ImageGeneratorForm.cs
+  WinFormsApp/Installer/build-installer.ps1
+  WinFormsApp/Installer/setup.iss
+  WinFormsApp/Installer/THIRD-PARTY-NOTICES.txt
+  WinFormsApp/Installer/licenses/
+  PythonBackend/ai_backend.py
 ```
