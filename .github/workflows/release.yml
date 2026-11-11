@@ -1,0 +1,71 @@
+name: Build and publish Windows release
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch && (github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, '[publish-release]'))
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build installer and portable package
+        shell: powershell
+        run: |
+          $versionNumber = [int]$env:GITHUB_RUN_NUMBER + 16
+          $version = "1.0.$versionNumber"
+          & .\WinFormsApp\Installer\build-installer.ps1 -AppVersion $version
+          if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
+          & .\WinFormsApp\Installer\build-portable.ps1 -AppVersion $version
+          if ($LASTEXITCODE -ne 0) { throw "Portable package build failed." }
+
+      - name: Publish GitHub release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $versionNumber = [int]$env:GITHUB_RUN_NUMBER + 16
+          $version = "1.0.$versionNumber"
+          $tag = "v$version"
+          $installer = "artifacts\installer\LocalIARunner-Setup-x64.exe"
+          $portable = "artifacts\portable\LocalIARunner-Portable-x64-$version.zip"
+          $notes = @"
+          ## Nouveautés de Local IA Runner $version
+
+          Cette version ajoute la gestion des images générées dans les projets de code. Le modèle peut lister les images du dossier de sortie configuré, les copier dans son projet, ou les renommer et déplacer dans le dossier d'images ou le projet. Les opérations restent limitées à ces dossiers et ne remplacent pas les fichiers existants.
+
+          Les délais sont réglables dans **Outils → Paramètres → Délais des outils** : délai d'inactivité de génération et durée maximale d'exécution Python.
+
+          L'application exécute localement les modèles de texte GGUF avec llama.cpp et génère des images avec stable-diffusion.cpp. Elle comprend les moteurs Windows x64, sans inclure les modèles IA.
+
+          ## Téléchargements
+
+          - `LocalIARunner-Setup-x64.exe` : installateur Windows 10/11 x64.
+          - `LocalIARunner-Portable-x64-$version.zip` : version portable à extraire et lancer, sans installation.
+
+          Les modèles doivent être téléchargés séparément ou déjà présents sur l'ordinateur. L'interface est en français.
+
+          Build du commit `$($env:GITHUB_SHA)`.
+          "@
+
+          gh release view $tag --json tagName 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $installer $portable --clobber
+          }
+          else {
+            gh release create $tag $installer $portable --title "Local IA Runner $version" --notes $notes --target $env:GITHUB_SHA --latest
+          }
+
+          if ($LASTEXITCODE -ne 0) { throw "GitHub release publication failed." }
