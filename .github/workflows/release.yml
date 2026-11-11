@@ -24,7 +24,7 @@ jobs:
       - name: Build installer and portable package
         shell: powershell
         run: |
-          $versionNumber = [int]$env:GITHUB_RUN_NUMBER + 15
+          $versionNumber = [int]$env:GITHUB_RUN_NUMBER + 14
           $version = "1.0.$versionNumber"
           & .\WinFormsApp\Installer\build-installer.ps1 -AppVersion $version
           if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
@@ -32,11 +32,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Portable package build failed." }
 
       - name: Publish GitHub release
-        shell: powershell
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $versionNumber = [int]$env:GITHUB_RUN_NUMBER + 15
+          $versionNumber = [int]$env:GITHUB_RUN_NUMBER + 14
           $version = "1.0.$versionNumber"
           $tag = "v$version"
           $installer = "artifacts\installer\LocalIARunner-Setup-x64.exe"
@@ -46,7 +46,7 @@ jobs:
 
           Cette version ajoute la gestion des images générées dans les projets de code. Le modèle peut lister les images du dossier de sortie configuré, les copier dans son projet, ou les renommer et déplacer dans le dossier d'images ou le projet. Les opérations restent limitées à ces dossiers et ne remplacent pas les fichiers existants.
 
-          Les délais sont réglables dans **Outils → Paramètres → Délais des outils** : délai d'inactivité de génération et durée maximale d'exécution Python.
+          Les délais sont réglables dans les paramètres, section **Délais des outils** : délai d'inactivité de génération et durée maximale d'exécution Python.
 
           L'application exécute localement les modèles de texte GGUF avec llama.cpp et génère des images avec stable-diffusion.cpp. Elle comprend les moteurs Windows x64, sans inclure les modèles IA.
 
@@ -57,17 +57,20 @@ jobs:
 
           Les modèles doivent être téléchargés séparément ou déjà présents sur l'ordinateur. L'interface est en français.
 
-          Build du commit `$($env:GITHUB_SHA)`.
+          Build du commit $env:GITHUB_SHA.
           "@
 
-          $releaseOutput = gh release create $tag $installer $portable --title "Local IA Runner $version" --notes $notes --target $env:GITHUB_SHA --latest 2>&1
-          $releaseExitCode = $LASTEXITCODE
-          if ($releaseExitCode -ne 0) {
-            Write-Output "Release creation failed; retrying by uploading the assets to an existing release."
-            Write-Output $releaseOutput
-            $releaseOutput = gh release upload $tag $installer $portable --clobber 2>&1
-            $releaseExitCode = $LASTEXITCODE
+          $releaseListOutput = gh release list --limit 100 --json tagName
+          if ($LASTEXITCODE -ne 0) { throw "Unable to list GitHub releases." }
+          $existingRelease = @($releaseListOutput | ConvertFrom-Json) | Where-Object { $_.tagName -eq $tag }
+
+          if ($existingRelease) {
+            gh release upload $tag $installer $portable --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Unable to upload release assets." }
+            gh release edit $tag --title "Local IA Runner $version" --notes $notes
+          }
+          else {
+            gh release create $tag $installer $portable --title "Local IA Runner $version" --notes $notes --target $env:GITHUB_SHA --latest
           }
 
-          Write-Output $releaseOutput
-          if ($releaseExitCode -ne 0) { throw "GitHub release publication failed (gh exit code $releaseExitCode)." }
+          if ($LASTEXITCODE -ne 0) { throw "GitHub release publication failed (gh exit code $LASTEXITCODE)." }
