@@ -1,0 +1,23 @@
+Local IA Runner includes the following third-party software:
+
+Microsoft .NET 10 runtime
+  Distributed under Microsoft's .NET Library license terms. See Licenses\dotnet-LICENSE.txt.
+
+Python 3.13.17 (Windows embeddable package)
+  Python Software Foundation license. See PythonRuntime\LICENSE.txt.
+
+llama.cpp b12244
+  MIT License. See Licenses\llama.cpp-LICENSE.txt.
+  LLVM OpenMP runtime license: see llama-bin\LICENSE-LLVM-OpenMP.
+
+stable-diffusion.cpp
+  Windows x64 Vulkan and CPU engines are bundled from the upstream release.
+  See stable-diffusion.cpp.txt and ggml.txt in stable-diffusion.cpp\windows-vulkan
+  and stable-diffusion.cpp\windows-cpu beside the included engine files.
+
+Microsoft Visual C++ v14 runtime
+  App-local MSVC runtime DLLs are provided for llama.cpp. See Microsoft's Visual C++
+  redistribution guidance: https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files.
+
+Newtonsoft.Json 13.0.3
+  MIT License. See Licenses\Newtonsoft.Json-LICENSE.md.
