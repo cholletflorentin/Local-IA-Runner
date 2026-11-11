@@ -24,7 +24,7 @@ jobs:
       - name: Build installer and portable package
         shell: powershell
         run: |
-          $versionNumber = [int]$env:GITHUB_RUN_NUMBER + 16
+          $versionNumber = [int]$env:GITHUB_RUN_NUMBER + 15
           $version = "1.0.$versionNumber"
           & .\WinFormsApp\Installer\build-installer.ps1 -AppVersion $version
           if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
@@ -36,7 +36,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $versionNumber = [int]$env:GITHUB_RUN_NUMBER + 16
+          $versionNumber = [int]$env:GITHUB_RUN_NUMBER + 15
           $version = "1.0.$versionNumber"
           $tag = "v$version"
           $installer = "artifacts\installer\LocalIARunner-Setup-x64.exe"
@@ -60,12 +60,14 @@ jobs:
           Build du commit `$($env:GITHUB_SHA)`.
           "@
 
-          gh release view $tag --json tagName 2>$null | Out-Null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $installer $portable --clobber
-          }
-          else {
-            gh release create $tag $installer $portable --title "Local IA Runner $version" --notes $notes --target $env:GITHUB_SHA --latest
+          $releaseOutput = gh release create $tag $installer $portable --title "Local IA Runner $version" --notes $notes --target $env:GITHUB_SHA --latest 2>&1
+          $releaseExitCode = $LASTEXITCODE
+          if ($releaseExitCode -ne 0) {
+            Write-Output "Release creation failed; retrying by uploading the assets to an existing release."
+            Write-Output $releaseOutput
+            $releaseOutput = gh release upload $tag $installer $portable --clobber 2>&1
+            $releaseExitCode = $LASTEXITCODE
           }
 
-          if ($LASTEXITCODE -ne 0) { throw "GitHub release publication failed." }
+          Write-Output $releaseOutput
+          if ($releaseExitCode -ne 0) { throw "GitHub release publication failed (gh exit code $releaseExitCode)." }
