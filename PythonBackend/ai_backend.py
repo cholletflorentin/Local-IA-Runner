@@ -1927,6 +1927,7 @@ class LlamaCppBackend:
             "Certains formats de chat ajoutent ensuite une balise finale </response> : elle peut suivre l'appel, "
             "elle termine cette réponse. N'écris rien après cette balise; attends le résultat de l'outil "
             "avant d'émettre un autre appel ou une réponse. "
+            "Un appel compact peut se terminer après son objet JSON complet, sans balise de fermeture; n'ajoute aucun caractère ni texte après l'objet. "
             "Un format local peut aussi emballer automatiquement l'appel dans un champ tool_call ou des balises <tools>; "
             "ces enveloppes ne doivent contenir que le même appel, sans texte explicatif. "
             "Si tu dois expliquer quelque chose avant ou après l'outil, ne l'appelle pas dans cette réponse : "
@@ -2210,10 +2211,27 @@ class LlamaCppBackend:
             closing_tag = f"</{tag_name}>"
             if inline_arguments and after_json.startswith(">"):
                 after_json = after_json[1:].lstrip()
-            if after_json[:len(closing_tag)].lower() != closing_tag:
+            if after_json[:len(closing_tag)].lower() == closing_tag:
+                trailing_text = after_json[len(closing_tag):]
+            elif inline_arguments:
+                # Compact calls may end after their JSON arguments. Some local
+                # templates add one redundant brace or empty response wrappers.
+                if after_json.startswith("}"):
+                    after_json = after_json[1:].lstrip()
+                    if after_json[:len(closing_tag)].lower() == closing_tag:
+                        trailing_text = after_json[len(closing_tag):]
+                    elif LlamaCppBackend._tool_envelope_suffix_is_complete(after_json):
+                        trailing_text = after_json
+                    else:
+                        return None
+                elif LlamaCppBackend._tool_envelope_suffix_is_complete(after_json):
+                    trailing_text = after_json
+                else:
+                    return None
+            else:
                 return None
-            trailing_text = after_json[len(closing_tag):]
-        if LlamaCppBackend._tool_response_suffix_state(trailing_text) != "complete":
+        if (LlamaCppBackend._tool_response_suffix_state(trailing_text) != "complete"
+                and not LlamaCppBackend._tool_envelope_suffix_is_complete(trailing_text)):
             return None
 
         if not isinstance(payload, dict):
@@ -2582,7 +2600,7 @@ class LlamaCppBackend:
             if connection is not None:
                 self._clear_request_connection(connection)
 
-        if in_tool_call and (tool_close_seen or tool_style in ("function", "wrapped")):
+        if in_tool_call and (tool_close_seen or tool_style in ("function", "wrapped", "tag")):
             call = self._parse_tool_call(output_buffer)
             if call is not None:
                 return collected_content(), call, cancelled, error, stream_started
