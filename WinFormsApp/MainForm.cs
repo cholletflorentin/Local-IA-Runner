@@ -65,6 +65,7 @@ namespace LocalAIApp
         private StatusBar _statusBar;
         private ModernMenuStrip _menuStrip;
         private ImageGeneratorForm _imageGeneratorForm;
+        private ForumForm? _forumForm;
 
         public MainForm()
         {
@@ -177,6 +178,7 @@ namespace LocalAIApp
             _menuStrip.RestartBackendClicked += OnRestartBackend;
             _menuStrip.SettingsClicked += OnSettings;
             _menuStrip.ImageGeneratorClicked += OnOpenImageGenerator;
+            _menuStrip.ForumClicked += OnOpenForum;
             _menuStrip.CheckForUpdatesClicked += OnCheckForUpdates;
             _menuStrip.ExitClicked += (s, e) => Application.Exit();
             this.Controls.Add(_menuStrip);
@@ -1219,6 +1221,7 @@ namespace LocalAIApp
                     reasoning_effort = _appSettings.ReasoningEffort,
                     enable_web_access = _appSettings.EnableWebAccess,
                     enable_code_execution = _appSettings.EnableCodeExecution,
+                    enable_forum = _appSettings.EnableForum,
                     code_workspace = _appSettings.CodeWorkspace,
                     default_image_model_path = _appSettings.DefaultImageModelPath,
                     generation_timeout_seconds = _appSettings.GenerationTimeoutSeconds,
@@ -1538,6 +1541,23 @@ namespace LocalAIApp
                     _imageGeneratorForm = null;
             };
             _imageGeneratorForm.Show(this);
+        }
+
+        private void OnOpenForum(object sender, EventArgs e)
+        {
+            if (_forumForm != null && !_forumForm.IsDisposed)
+            {
+                _forumForm.Activate();
+                return;
+            }
+
+            _forumForm = new ForumForm();
+            _forumForm.FormClosed += (s, args) =>
+            {
+                if (ReferenceEquals(_forumForm, s))
+                    _forumForm = null;
+            };
+            _forumForm.Show(this);
         }
 
         private void SendImageBackendRequest(object request)
@@ -1994,6 +2014,7 @@ namespace LocalAIApp
         public string DefaultImageModelPath { get; set; } = "";
         public bool EnableWebAccess { get; set; } = true;
         public bool EnableCodeExecution { get; set; } = false;
+        public bool EnableForum { get; set; } = false;
         public bool AutoUpdateEnabled { get; set; } = true;
         public string CodeWorkspace { get; set; } = DefaultCodeWorkspace;
         public float Temperature { get; set; } = 0.7f;
@@ -4879,6 +4900,7 @@ namespace LocalAIApp
         public event EventHandler ExitClicked;
         public event EventHandler SettingsClicked;
         public event EventHandler ImageGeneratorClicked;
+        public event EventHandler? ForumClicked;
         public event EventHandler CheckForUpdatesClicked;
 
         public ModernMenuStrip()
@@ -4900,6 +4922,7 @@ namespace LocalAIApp
             toolsMenu.DropDownItems.Add(CreateItem("Redemarrer le backend IA", null, (s, e) => RestartBackendClicked?.Invoke(this, e)));
             toolsMenu.DropDownItems.Add(new ToolStripSeparator());
             toolsMenu.DropDownItems.Add(CreateItem("Générer une image…", null, (s, e) => ImageGeneratorClicked?.Invoke(this, e)));
+            toolsMenu.DropDownItems.Add(CreateItem("Forum des IA…", null, (s, e) => ForumClicked?.Invoke(this, e)));
             toolsMenu.DropDownItems.Add(CreateItem("Parametres...", "Ctrl+P", (s, e) => SettingsClicked?.Invoke(this, e)));
             toolsMenu.DropDownItems.Add(new ToolStripSeparator());
             toolsMenu.DropDownItems.Add(CreateItem("Vérifier les mises à jour…", null, (s, e) => CheckForUpdatesClicked?.Invoke(this, e)));
@@ -5052,6 +5075,7 @@ namespace LocalAIApp
         private ModernTextBox _defaultImageModelPathTextBox = null!;
         private CheckBox _webAccessCheckBox = null!;
         private CheckBox _codeExecutionCheckBox = null!;
+        private CheckBox _forumEnabledCheckBox = null!;
         private CheckBox _autoUpdateCheckBox = null!;
         private CheckBox _ssdModelMemoryCheckBox = null!;
         private ModernTextBox _codeWorkspaceTextBox = null!;
@@ -5086,6 +5110,7 @@ namespace LocalAIApp
                 DefaultImageModelPath = currentSettings.DefaultImageModelPath ?? "",
                 EnableWebAccess = currentSettings.EnableWebAccess,
                 EnableCodeExecution = currentSettings.EnableCodeExecution,
+                EnableForum = currentSettings.EnableForum,
                 AutoUpdateEnabled = currentSettings.AutoUpdateEnabled,
                 CodeWorkspace = string.IsNullOrWhiteSpace(currentSettings.CodeWorkspace)
                     ? AppSettings.DefaultCodeWorkspace
@@ -5248,6 +5273,19 @@ namespace LocalAIApp
                 "Écriture de fichiers et exécution Python",
                 "Autorise le modèle à lire/écrire dans le dossier choisi et à lancer du Python avec les droits de votre session Windows.",
                 _codeExecutionCheckBox));
+
+            _forumEnabledCheckBox = new CheckBox
+            {
+                Text = "Activé",
+                AutoSize = true,
+                ForeColor = ThemeColors.TextPrimary,
+                BackColor = ThemeColors.Surface,
+                FlatStyle = FlatStyle.Flat
+            };
+            content.Controls.Add(CreateSettingCard(
+                "Forum partagé des IA",
+                "Désactivé par défaut. Autorise tous les modèles à rechercher et publier des informations dans le forum local partagé. Les publications restent visibles et supprimables dans Outils > Forum des IA.",
+                _forumEnabledCheckBox));
 
             _codeWorkspaceTextBox = new ModernTextBox
             {
@@ -5623,6 +5661,7 @@ namespace LocalAIApp
             _defaultImageModelPathTextBox.Text = Settings.DefaultImageModelPath ?? "";
             _webAccessCheckBox.Checked = Settings.EnableWebAccess;
             _codeExecutionCheckBox.Checked = Settings.EnableCodeExecution;
+            _forumEnabledCheckBox.Checked = Settings.EnableForum;
             _autoUpdateCheckBox.Checked = Settings.AutoUpdateEnabled;
             _codeWorkspaceTextBox.Text = Settings.CodeWorkspace ?? AppSettings.DefaultCodeWorkspace;
             _stopSequencesTextBox.Text = Settings.StopSequences ?? "";
@@ -5656,6 +5695,7 @@ namespace LocalAIApp
             Settings.DefaultImageModelPath = _defaultImageModelPathTextBox.Text.Trim();
             Settings.EnableWebAccess = _webAccessCheckBox.Checked;
             Settings.EnableCodeExecution = _codeExecutionCheckBox.Checked;
+            Settings.EnableForum = _forumEnabledCheckBox.Checked;
             Settings.AutoUpdateEnabled = _autoUpdateCheckBox.Checked;
             Settings.CodeWorkspace = string.IsNullOrWhiteSpace(_codeWorkspaceTextBox.Text)
                 ? AppSettings.DefaultCodeWorkspace

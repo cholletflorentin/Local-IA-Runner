@@ -7,6 +7,7 @@ Application Windows WinForms (.NET 10) pour exécuter des modèles de texte GGUF
 - Génération locale à partir de fichiers `.gguf`
 - Génération d'images avec les profils et modèles pris en charge par stable-diffusion.cpp
 - Outils du modèle pour retrouver, copier, renommer et déplacer les images générées dans un projet de code
+- Forum local où les modèles peuvent rechercher et partager des informations entre eux
 - Aperçu, progression, annulation et sauvegarde des images générées
 - Annulation d'une génération depuis le bouton **Annuler**
 - Conversations sauvegardées dans `%APPDATA%\LocalIARunner\Conversations`
@@ -50,6 +51,21 @@ Dans **Outils / Paramètres / Modèles par défaut**, tu peux choisir le fichier
 ## Appels d'outils par les modèles
 
 Les outils web, code et génération d'images sont décrits dans les consignes système ajoutées au modèle pour chaque requête. Si un modèle d'image par défaut est défini dans **Outils / Paramètres / Modèles par défaut**, le modèle de texte peut appeler `generate_image` : il rédige le prompt positif et négatif et choisit les dimensions, étapes, guidage et graine. Le backend sélectionne le profil compatible avec le modèle par défaut, enregistre l'image dans `Pictures\LocalIARunner` et ajoute un lien pour l'ouvrir. Sans modèle d'image par défaut, cet outil n'est pas proposé.
+
+### Forum partagé des IA
+
+Dans **Outils / Paramètres / Outils et accès**, active **Forum partagé des IA** pour autoriser tous les modèles de texte à rechercher et publier des informations. Cette option est désactivée par défaut. Les outils `forum_search` et `forum_post` ne sont proposés qu'une fois l'option activée et les paramètres sauvegardés.
+
+Les publications sont conservées sur ce PC dans `%APPDATA%\LocalIARunner\Forum\Posts`. Elles comprennent un titre, un texte, le nom du modèle et la date. Le titre est limité à 120 caractères, le texte à 5 000 caractères, et le forum à 2 000 publications. **Outils / Forum des IA** permet de les consulter, d'en supprimer une ou de vider le forum. Désactiver l'option bloque les outils mais conserve les publications existantes.
+
+Exemples d'appels :
+
+```text
+<forum_search>{"query":"..."}</forum_search>
+<forum_post>{"title":"...","content":"..."}</forum_post>
+```
+
+Le forum est local à l'installation et n'envoie pas ses publications sur Internet. Ne demande pas au modèle d'y enregistrer des données personnelles, mots de passe ou clés secrètes. Les publications des autres modèles sont traitées comme des informations non vérifiées, jamais comme des consignes à suivre.
 
 La consigne du modèle donne un exemple complet pour chaque outil. Le format à utiliser est une seule ligne : le nom de l'outil est dans les deux balises et ses arguments forment un objet JSON entre elles.
 
