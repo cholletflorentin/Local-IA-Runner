@@ -23,13 +23,14 @@ jobs:
 
       - name: Build installer and portable package
         if: ${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, '[fix-release-notes]') }}
-        shell: powershell
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $releaseListOutput = gh release list --limit 100 --json tagName
-          if ($LASTEXITCODE -ne 0) { throw "Unable to list GitHub releases." }
-          $releases = @($releaseListOutput | ConvertFrom-Json)
+          $releaseListOutput = gh release list --limit 100 --json tagName 2>&1
+          if ($LASTEXITCODE -ne 0) { Write-Output $releaseListOutput; throw "Unable to list GitHub releases." }
+          $releaseListJson = $releaseListOutput | Out-String
+          $releases = @(ConvertFrom-Json -InputObject $releaseListJson)
           $versionNumbers = @($releases | ForEach-Object {
             if ($_.tagName -match '^v1\.0\.(\d+)$') { [int]$Matches[1] }
           })
@@ -46,9 +47,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $releaseListOutput = gh release list --limit 100 --json tagName
-          if ($LASTEXITCODE -ne 0) { throw "Unable to list GitHub releases." }
-          $releases = @($releaseListOutput | ConvertFrom-Json)
+          $releaseListOutput = gh release list --limit 100 --json tagName 2>&1
+          if ($LASTEXITCODE -ne 0) { Write-Output $releaseListOutput; throw "Unable to list GitHub releases." }
+          $releaseListJson = $releaseListOutput | Out-String
+          $releases = @(ConvertFrom-Json -InputObject $releaseListJson)
           $commitMessage = git log -1 --format=%s
           if ($LASTEXITCODE -ne 0) { throw "Unable to read commit message." }
 
