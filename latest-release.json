@@ -1,19 +1,19 @@
 {
-  "tag_name": "v1.0.22",
-  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.22",
-  "body": "Local IA Runner 1.0.22. Téléchargez l'installateur Windows 10/11 x64 ou le paquet portable depuis GitHub. Les modèles IA ne sont pas inclus.",
+  "tag_name": "v1.0.23",
+  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.23",
+  "body": "## Nouveautés de Local IA Runner 1.0.23\r\n\r\n- Fix update check and use installer for updates\r\n\r\n## Téléchargements\r\n\r\n- LocalIARunner-Setup-x64.exe : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.\r\n- LocalIARunner-Portable-x64-1.0.23.zip : version portable à extraire et lancer.\r\n\r\nLes modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.",
   "assets": [
     {
       "name": "LocalIARunner-Setup-x64.exe",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.22/LocalIARunner-Setup-x64.exe",
-      "digest": "sha256:517f785c6385f81a2d3e119fb66384138505ec3dd5e85df365652bd5262f5c5b",
-      "size": 94998655
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.23/LocalIARunner-Setup-x64.exe",
+      "digest": "sha256:83ebcfa7967b4ca9d82f04a7c62aa2349e86c052af1561db370032504e5d8605",
+      "size": 94996601
     },
     {
-      "name": "LocalIARunner-Portable-x64-1.0.22.zip",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.22/LocalIARunner-Portable-x64-1.0.22.zip",
-      "digest": "sha256:c013ea15ea124c6e5c0c3cb5e8f00bc45fa5fc2932fa508e3f9891bbef629e40",
-      "size": 138092213
+      "name": "LocalIARunner-Portable-x64-1.0.23.zip",
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.23/LocalIARunner-Portable-x64-1.0.23.zip",
+      "digest": "sha256:9bcc2ffb6f91cf5bd8f70faf0a7447a11c6d4b1e3061e0900dd15a0cc6e40614",
+      "size": 138093766
     }
   ]
 }
