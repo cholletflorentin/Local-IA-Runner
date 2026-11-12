@@ -1927,6 +1927,8 @@ class LlamaCppBackend:
             "Certains formats de chat ajoutent ensuite une balise finale </response> : elle peut suivre l'appel, "
             "elle termine cette réponse. N'écris rien après cette balise; attends le résultat de l'outil "
             "avant d'émettre un autre appel ou une réponse. "
+            "Un format local peut aussi emballer automatiquement l'appel dans un champ tool_call ou des balises <tools>; "
+            "ces enveloppes ne doivent contenir que le même appel, sans texte explicatif. "
             "Si tu dois expliquer quelque chose avant ou après l'outil, ne l'appelle pas dans cette réponse : "
             "écris uniquement l'appel d'outil, attends son résultat, puis réponds normalement. "
             "Après le résultat d'un outil, poursuis la tâche et réponds normalement. "
@@ -1954,7 +1956,218 @@ class LlamaCppBackend:
         )
 
     @staticmethod
+    def _json_tool_call_wrapper_state(content):
+        """Recognize a streamed JSON object whose only field wraps a tool call."""
+        text = str(content or "").lstrip()
+        if not text.startswith("{"):
+            return "text"
+
+        remainder = text[1:].lstrip()
+        if not remainder:
+            return "prefix"
+        if remainder[0] != '"':
+            return "text"
+
+        remainder = remainder[1:]
+        key = "tool_call"
+        shared_length = min(len(remainder), len(key))
+        if remainder[:shared_length] != key[:shared_length]:
+            return "text"
+        if len(remainder) < len(key):
+            return "prefix"
+
+        remainder = remainder[len(key):]
+        if not remainder:
+            return "prefix"
+        if remainder[0] != '"':
+            return "text"
+
+        remainder = remainder[1:].lstrip()
+        if not remainder:
+            return "prefix"
+        if remainder[0] != ":":
+            return "text"
+
+        remainder = remainder[1:].lstrip()
+        if not remainder:
+            return "prefix"
+        if remainder[0] not in ('"', "{"):
+            return "text"
+        return "wrapped"
+
+    @staticmethod
+    def _tool_call_wrapper_start_state(content):
+        text = str(content or "").lstrip()
+        lowered = text.lower()
+        tools_open = "<tools>"
+
+        if text.startswith("<") and tools_open.startswith(lowered):
+            return "prefix"
+        if lowered.startswith(tools_open):
+            text = text[len(tools_open):].lstrip()
+            if not text:
+                return "prefix"
+            state = LlamaCppBackend._json_tool_call_wrapper_state(text)
+            if state != "text":
+                return state
+            match = re.match(r"<([a-z_]+)(?=\s|>)", text, flags=re.IGNORECASE)
+            if match is not None and match.group(1).lower() in SUPPORTED_TOOL_NAMES:
+                return "wrapped"
+            for name in SUPPORTED_TOOL_NAMES:
+                if f"<{name}".startswith(text.lower()):
+                    return "prefix"
+            return "text"
+
+        return LlamaCppBackend._json_tool_call_wrapper_state(text)
+
+    @staticmethod
+    def _tool_envelope_suffix_is_complete(suffix):
+        """Accept only empty response/tool wrappers after a wrapped call."""
+        suffix = str(suffix or "").replace("\\r", "\r").replace("\\n", "\n")
+        while suffix:
+            suffix = suffix.lstrip()
+            if not suffix:
+                return True
+
+            lowered = suffix.lower()
+            if suffix[0] in ('"', "}"):
+                suffix = suffix[1:]
+                continue
+
+            closing_response = re.match(r"</response\s*>", suffix, flags=re.IGNORECASE)
+            if closing_response is not None:
+                suffix = suffix[closing_response.end():]
+                continue
+
+            opening_response = re.match(r"<response\s*>", suffix, flags=re.IGNORECASE)
+            if opening_response is not None:
+                remainder = suffix[opening_response.end():].lstrip()
+                closing_response = re.match(r"</response\s*>", remainder, flags=re.IGNORECASE)
+                if closing_response is None:
+                    return False
+                suffix = remainder[closing_response.end():]
+                continue
+
+            closing_tools = re.match(r"</tools\s*>", suffix, flags=re.IGNORECASE)
+            if closing_tools is not None:
+                suffix = suffix[closing_tools.end():]
+                continue
+
+            return False
+        return True
+
+    @staticmethod
+    def _unwrap_tool_call_envelope(content):
+        """Extract one tool call from known JSON/chat-template wrappers."""
+        text = str(content or "").strip()
+        if not text:
+            return text, False
+
+        had_tools_wrapper = text[:len("<tools>")].lower() == "<tools>"
+        if had_tools_wrapper:
+            text = text[len("<tools>"):].lstrip()
+
+        try:
+            payload, json_end = json.JSONDecoder().raw_decode(text)
+        except (TypeError, json.JSONDecodeError):
+            payload = None
+            json_end = 0
+
+        if isinstance(payload, dict) and set(payload) == {"tool_call"}:
+            tool_call = payload.get("tool_call")
+            if not LlamaCppBackend._tool_envelope_suffix_is_complete(text[json_end:]):
+                return None, True
+            if isinstance(tool_call, str):
+                return tool_call.strip(), True
+            if isinstance(tool_call, dict):
+                name = tool_call.get("name")
+                arguments = tool_call.get("arguments", {})
+                if (isinstance(name, str) and name.strip() in SUPPORTED_TOOL_NAMES
+                        and isinstance(arguments, dict)):
+                    payload_text = json.dumps(
+                        {"name": name.strip(), "arguments": arguments},
+                        ensure_ascii=False
+                    )
+                    return f"<tool_call>{payload_text}</tool_call>", True
+            return None, True
+
+        json_prefix = re.match(r'^\{\s*"tool_call"\s*:\s*"', text, flags=re.IGNORECASE)
+        if json_prefix is not None:
+            value = text[json_prefix.end():].lstrip()
+            tag_match = re.match(r"<([a-z_]+)(?=\s|>)", value, flags=re.IGNORECASE)
+            if tag_match is None:
+                return None, True
+
+            tag_name = tag_match.group(1).lower()
+            if tag_name not in SUPPORTED_TOOL_NAMES:
+                return None, True
+
+            closing_tag = f"</{tag_name}>"
+            closing_index = value.lower().find(closing_tag)
+            if closing_index < 0:
+                return None, True
+
+            call_end = closing_index + len(closing_tag)
+            call = value[:call_end].strip()
+            if not LlamaCppBackend._tool_envelope_suffix_is_complete(value[call_end:]):
+                return None, True
+            return call, True
+
+        if had_tools_wrapper:
+            tag_match = re.match(r"<([a-z_]+)(?=\s|>)", text, flags=re.IGNORECASE)
+            if tag_match is None:
+                return None, True
+            tag_name = tag_match.group(1).lower()
+            if tag_name not in SUPPORTED_TOOL_NAMES:
+                return None, True
+            closing_tag = f"</{tag_name}>"
+            closing_index = text.lower().find(closing_tag)
+            if closing_index < 0:
+                return None, True
+            call_end = closing_index + len(closing_tag)
+            if not LlamaCppBackend._tool_envelope_suffix_is_complete(text[call_end:]):
+                return None, True
+            return text[:call_end].strip(), True
+
+        # Some templates put only a closing <tools> tag after the JSON wrapper.
+        if text.lower().endswith("</tools>"):
+            tag_match = re.match(r"<([a-z_]+)(?=\s|>)", text, flags=re.IGNORECASE)
+            if tag_match is not None and tag_match.group(1).lower() in SUPPORTED_TOOL_NAMES:
+                tag_name = tag_match.group(1).lower()
+                closing_tag = f"</{tag_name}>"
+                closing_index = text.lower().find(closing_tag)
+                if closing_index >= 0:
+                    call_end = closing_index + len(closing_tag)
+                    if LlamaCppBackend._tool_envelope_suffix_is_complete(text[call_end:]):
+                        return text[:call_end].strip(), True
+
+        if (LlamaCppBackend._json_tool_call_wrapper_state(text) in ("prefix", "wrapped")
+                or had_tools_wrapper):
+            return None, True
+        return text, False
+
+    @staticmethod
     def _parse_tool_call(content):
+        content, wrapped = LlamaCppBackend._unwrap_tool_call_envelope(content)
+        if content is None:
+            return None
+
+        call = LlamaCppBackend._parse_plain_tool_call(content)
+        if call is not None or not wrapped:
+            return call
+
+        # Repair one redundant closing brace emitted by some tool-call wrappers.
+        closing_match = re.search(r"</([a-z_]+)>$", content, flags=re.IGNORECASE)
+        if closing_match is not None:
+            before_closing_tag = content[:closing_match.start()]
+            if before_closing_tag.endswith("}"):
+                repaired = (before_closing_tag[:-1]
+                            + content[closing_match.start():])
+                return LlamaCppBackend._parse_plain_tool_call(repaired)
+        return None
+
+    @staticmethod
+    def _parse_plain_tool_call(content):
         content = str(content or "").strip()
         function_match = re.match(r"([a-z_]+)\s*\(", content, flags=re.IGNORECASE)
         function_style = function_match is not None
@@ -2104,6 +2317,11 @@ class LlamaCppBackend:
     def _detect_tool_call_start(candidate):
         stripped = candidate.lstrip()
         lowered = stripped.lower()
+        wrapper_state = LlamaCppBackend._tool_call_wrapper_start_state(stripped)
+        if wrapper_state == "prefix":
+            return "prefix", ""
+        if wrapper_state == "wrapped":
+            return "wrapped", stripped
         if TOOL_CALL_OPEN.startswith(stripped):
             return "prefix", ""
         if stripped.startswith(TOOL_CALL_OPEN):
@@ -2207,6 +2425,8 @@ class LlamaCppBackend:
 
             output_buffer += content
             if in_tool_call:
+                if tool_style == "wrapped":
+                    return
                 if tool_style == "function":
                     boundary_window = output_buffer[-(len(content) + 16):].lower()
                     if "</response" in boundary_window:
@@ -2246,6 +2466,11 @@ class LlamaCppBackend:
 
             detected_type, _ = self._detect_tool_call_start(output_buffer)
             if detected_type == "prefix":
+                return
+            if detected_type == "wrapped":
+                tool_tag = "tool_call"
+                tool_style = "wrapped"
+                in_tool_call = True
                 return
             if detected_type == "tool":
                 tag_match = re.match(r"\s*<([a-z_]+)", output_buffer, flags=re.IGNORECASE)
@@ -2357,7 +2582,7 @@ class LlamaCppBackend:
             if connection is not None:
                 self._clear_request_connection(connection)
 
-        if in_tool_call and (tool_close_seen or tool_style == "function"):
+        if in_tool_call and (tool_close_seen or tool_style in ("function", "wrapped")):
             call = self._parse_tool_call(output_buffer)
             if call is not None:
                 return collected_content(), call, cancelled, error, stream_started
