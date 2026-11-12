@@ -123,6 +123,9 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath 'latest-release.json' -Encoding utf8
 
+          gh release upload $tag 'latest-release.json' --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Unable to upload the latest-release manifest." }
+
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- latest-release.json

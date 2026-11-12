@@ -48,6 +48,7 @@ namespace LocalAIApp
     internal static class GitHubUpdater
     {
         private const string ReleaseApiUrl = "https://api.github.com/repos/cholletflorentin/Local-IA-Runner/releases/latest";
+        private const string ReleaseManifestAssetUrl = "https://github.com/cholletflorentin/Local-IA-Runner/releases/latest/download/latest-release.json";
         private const string ReleaseManifestUrl = "https://raw.githubusercontent.com/cholletflorentin/Local-IA-Runner/main/latest-release.json";
         private static readonly HttpClient HttpClient = CreateHttpClient();
 
@@ -224,25 +225,29 @@ namespace LocalAIApp
 
         private static async Task<JObject> GetLatestReleaseMetadataAsync(CancellationToken cancellationToken)
         {
-            Exception? manifestFailure = null;
-            try
+            var manifestFailures = new List<string>();
+            var manifestUrls = new[] { ReleaseManifestAssetUrl, ReleaseManifestUrl };
+            foreach (var baseUrl in manifestUrls)
             {
-                var manifestUrl = $"{ReleaseManifestUrl}?t={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
-                using var request = new HttpRequestMessage(HttpMethod.Get, manifestUrl);
-                using var response = await HttpClient.SendAsync(
-                    request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-                if (response.IsSuccessStatusCode)
+                try
                 {
+                    var manifestUrl = $"{baseUrl}?t={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+                    using var request = new HttpRequestMessage(HttpMethod.Get, manifestUrl);
+                    using var response = await HttpClient.SendAsync(
+                        request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        manifestFailures.Add($"{new Uri(baseUrl).Host} : HTTP {(int)response.StatusCode} ({response.ReasonPhrase})");
+                        continue;
+                    }
+
                     var manifestJson = await response.Content.ReadAsStringAsync(cancellationToken);
                     return JObject.Parse(manifestJson);
                 }
-
-                manifestFailure = new HttpRequestException(
-                    $"Le manifeste de mise à jour a renvoyé HTTP {(int)response.StatusCode} ({response.ReasonPhrase}).");
-            }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or Newtonsoft.Json.JsonException)
-            {
-                manifestFailure = ex;
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or Newtonsoft.Json.JsonException)
+                {
+                    manifestFailures.Add($"{new Uri(baseUrl).Host} : {ex.Message}");
+                }
             }
 
             using var apiRequest = new HttpRequestMessage(HttpMethod.Get, ReleaseApiUrl);
@@ -257,7 +262,7 @@ namespace LocalAIApp
                 var detail = string.IsNullOrWhiteSpace(apiMessage) ? "" : $" Détail : {apiMessage}";
                 throw new HttpRequestException(
                     $"GitHub a refusé la vérification (HTTP {(int)apiResponse.StatusCode}).{detail} " +
-                    $"Le manifeste est également indisponible ({manifestFailure?.Message ?? "erreur inconnue"}).");
+                    $"Les manifestes de release sont également indisponibles ({string.Join(" ; ", manifestFailures)}).");
             }
 
             return JObject.Parse(apiContent);
