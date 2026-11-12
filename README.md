@@ -51,13 +51,13 @@ Dans **Outils / Paramètres / Modèles par défaut**, tu peux choisir le fichier
 
 Les outils web, code et génération d'images sont décrits dans les consignes système ajoutées au modèle pour chaque requête. Si un modèle d'image par défaut est défini dans **Outils / Paramètres / Modèles par défaut**, le modèle de texte peut appeler `generate_image` : il rédige le prompt positif et négatif et choisit les dimensions, étapes, guidage et graine. Le backend sélectionne le profil compatible avec le modèle par défaut, enregistre l'image dans `Pictures\LocalIARunner` et ajoute un lien pour l'ouvrir. Sans modèle d'image par défaut, cet outil n'est pas proposé.
 
-Un appel d'outil est exécuté uniquement si la sortie complète du modèle contient un seul bloc d'outil, sans texte avant ni après. Le modèle peut utiliser une balise ou la syntaxe d'appel de fonction `web_search({"query":"..."})` :
+La consigne du modèle donne un exemple complet pour chaque outil. Le format à utiliser est une seule ligne : le nom de l'outil est dans les deux balises et ses arguments forment un objet JSON entre elles.
 
 ```text
-<web_search {"query":"actualité locale aujourd'hui"}></web_search>
+<web_search>{"query":"actualité locale aujourd'hui"}</web_search>
 ```
 
-Un appel accompagné d'une phrase est affiché comme texte et n'est pas exécuté. Certains formats locaux entourent l'unique appel avec un champ tool_call, des balises <tools> ou des balises de réponse vides; le backend retire ces enveloppes avant l'exécution. Une balise compacte peut se terminer après son objet JSON complet, sans balise de fermeture, si aucun autre texte ne suit. Le modèle ne peut émettre l'appel suivant qu'après avoir reçu le résultat du précédent. Pour `write_file`, encode les retours de ligne du contenu en `\n`; les retours bruts sont aussi acceptés. Les fichiers sont écrits dans le dossier de travail configuré. L'écriture de fichiers et l'exécution Python doivent être autorisées dans les paramètres.
+La réponse complète doit contenir uniquement cet appel, sans phrase ni Markdown autour. Un seul outil est appelé à la fois; après son résultat, le modèle peut continuer. Pour `write_file`, encode les retours de ligne du contenu en `\n`. Les chemins de fichiers sont limités au dossier de travail configuré. L'écriture de fichiers et l'exécution Python doivent être autorisées dans les paramètres.
 
 Quand ces outils sont autorisés, le modèle peut utiliser `list_images` pour parcourir le dossier de sortie configuré dans la fenêtre de génération d'images (par défaut `Pictures\LocalIARunner`), `copy_image` pour copier une image générée dans le dossier du projet et `move_image` pour la renommer/déplacer dans le dossier des images ou vers le projet. Les chemins sont relatifs à ces deux dossiers, les fichiers existants ne sont pas remplacés et les images ne peuvent pas sortir de ces emplacements. Après copie dans le projet, le modèle peut référencer l'image dans son code, par exemple `assets/image.png`.
 
