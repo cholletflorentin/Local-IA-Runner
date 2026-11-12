@@ -2126,15 +2126,15 @@ class LlamaCppBackend:
 
     @staticmethod
     def _parse_tool_call(content):
-        content, wrapped = LlamaCppBackend._unwrap_tool_call_envelope(content)
+        content, _ = LlamaCppBackend._unwrap_tool_call_envelope(content)
         if content is None:
             return None
 
         call = LlamaCppBackend._parse_plain_tool_call(content)
-        if call is not None or not wrapped:
+        if call is not None:
             return call
 
-        # Repair one redundant closing brace emitted by some tool-call wrappers.
+        # Repair one redundant closing brace, while still requiring an exact tool tag and JSON body.
         closing_match = re.search(r"</([a-z_]+)>$", content, flags=re.IGNORECASE)
         if closing_match is not None:
             before_closing_tag = content[:closing_match.start()]
