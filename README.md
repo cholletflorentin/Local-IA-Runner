@@ -21,7 +21,7 @@ Pour compiler les versions installable et portable depuis les sources, installer
 - le dossier portable versionné `artifacts\portable\LocalIARunner-Portable-x64-<version>`, à lancer avec `Local IA Runner.exe`;
 - l'archive portable `artifacts\portable\LocalIARunner-Portable-x64-<version>.zip`, à extraire avant de lancer l'application.
 
-Le workflow `.github/workflows/release.yml` publie un GitHub Release uniquement sur demande : lancement manuel depuis l'onglet Actions ou commit dont le message commence par `[publish-release]`. Chaque release reçoit une version croissante `1.0.<numéro du build>` et contient l'installateur ainsi que l'archive portable versionnée. Les compilations locales suppriment les anciennes versions portables après la génération de la nouvelle.
+Le workflow `.github/workflows/release.yml` publie un GitHub Release uniquement sur demande : lancement manuel depuis l'onglet Actions ou commit dont le message commence par `[publish-release]`. Chaque release reçoit une version croissante `1.0.<numéro du build>`, une description basée sur le sujet et le corps du commit de publication, l'installateur ainsi que l'archive portable versionnée. Le workflow met également à jour `latest-release.json`, utilisé par l'application pour éviter les limites de requêtes de l'API GitHub. Les compilations locales suppriment les anciennes versions portables après la génération de la nouvelle.
 
 Pour compiler uniquement l'installateur, exécuter :
 
@@ -63,7 +63,7 @@ Quand ces outils sont autorisés, le modèle peut utiliser `list_images` pour pa
 
 Dans **Outils / Paramètres / Délais des outils**, tu peux régler le délai d'inactivité d'une génération (30 secondes à 2 heures, 900 secondes par défaut) ainsi que le temps maximal accordé à un script Python (1 seconde à 2 heures, 30 secondes par défaut). L'activité du modèle et la progression des outils réinitialisent le délai d'inactivité.
 
-Les mises à jour sont activées par défaut dans **Outils / Paramètres / Mises à jour**. Au démarrage, l'application vérifie la dernière release GitHub, télécharge le paquet adapté (installateur ou portable) et valide son empreinte SHA-256. Le remplacement des fichiers attend la fermeture normale de l'application; les modèles, conversations et paramètres ne sont pas déplacés. Le menu **Outils / Vérifier les mises à jour** permet de lancer la vérification manuellement.
+Les mises à jour sont activées par défaut dans **Outils / Paramètres / Mises à jour**. Au démarrage, l'application lit le manifeste public de la dernière release, télécharge l'installateur Windows et valide son empreinte SHA-256. À la fermeture, l'installateur est exécuté en mode silencieux dans le dossier actuel de l'application. Le menu **Outils / Vérifier les mises à jour** permet de lancer la vérification manuellement.
 
 ## Structure
 

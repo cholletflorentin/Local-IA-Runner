@@ -7,9 +7,13 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: publish-windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
-    if: github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch && (github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, '[publish-release]') || startsWith(github.event.head_commit.message, '[fix-release-notes]'))
+    if: github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch && (github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, '[publish-release]'))
     runs-on: windows-latest
 
     steps:
@@ -22,15 +26,13 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Build installer and portable package
-        if: ${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, '[fix-release-notes]') }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $releaseListOutput = gh release list --limit 100 --json tagName 2>&1
           if ($LASTEXITCODE -ne 0) { Write-Output $releaseListOutput; throw "Unable to list GitHub releases." }
-          $releaseListJson = $releaseListOutput | Out-String
-          $releases = @(ConvertFrom-Json -InputObject $releaseListJson)
+          $releases = @($releaseListOutput | Out-String | ConvertFrom-Json)
           $versionNumbers = @($releases | ForEach-Object {
             if ($_.tagName -match '^v1\.0\.(\d+)$') { [int]$Matches[1] }
           })
@@ -42,44 +44,25 @@ jobs:
           & .\WinFormsApp\Installer\build-portable.ps1 -AppVersion $version
           if ($LASTEXITCODE -ne 0) { throw "Portable package build failed." }
 
-      - name: Publish GitHub release
+      - name: Publish GitHub release and update manifest
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $releaseListOutput = gh release list --limit 100 --json tagName 2>&1
           if ($LASTEXITCODE -ne 0) { Write-Output $releaseListOutput; throw "Unable to list GitHub releases." }
-          $releaseListJson = $releaseListOutput | Out-String
-          $releases = @(ConvertFrom-Json -InputObject $releaseListJson)
-          $commitMessage = git log -1 --format=%s
-          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit message." }
+          $releases = @($releaseListOutput | Out-String | ConvertFrom-Json)
 
-          if ($commitMessage.StartsWith('[fix-release-notes]')) {
-            foreach ($release in $releases) {
-              if ($release.tagName -notmatch '^v1\.0\.\d+$') { continue }
-              $version = $release.tagName.Substring(1)
-              $notes = @"
-          ## Nouveautés de Local IA Runner $version
-
-          Cette version ajoute la gestion des images générées dans les projets de code. Le modèle peut lister les images du dossier de sortie configuré, les copier dans son projet, ou les renommer et déplacer dans le dossier d'images ou le projet. Les opérations restent limitées à ces dossiers et ne remplacent pas les fichiers existants.
-
-          Les délais sont réglables dans les paramètres, section **Délais des outils** : délai d'inactivité de génération et durée maximale d'exécution Python.
-
-          Les mises à jour sont vérifiées depuis GitHub au démarrage, téléchargées et validées par SHA-256, puis appliquées à la fermeture de l'application.
-
-          L'application exécute localement les modèles de texte GGUF avec llama.cpp et génère des images avec stable-diffusion.cpp. Elle comprend les moteurs Windows x64, sans inclure les modèles IA.
-
-          ## Téléchargements
-
-          - `LocalIARunner-Setup-x64.exe` : installateur Windows 10/11 x64.
-          - `LocalIARunner-Portable-x64-$version.zip` : version portable à extraire et lancer, sans installation.
-
-          Les modèles doivent être téléchargés séparément ou déjà présents sur l'ordinateur. L'interface est en français.
-          "@
-              gh release edit $release.tagName --title "Local IA Runner $version" --notes $notes
-              if ($LASTEXITCODE -ne 0) { throw "Unable to update release notes for $($release.tagName)." }
-            }
-            exit 0
+          $commitSubject = (git log -1 --format=%s).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit subject." }
+          $commitBody = (git log -1 --format=%b | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit description." }
+          $releaseSummary = $commitSubject -replace '^\[publish-release\]\s*', ''
+          if ([string]::IsNullOrWhiteSpace($releaseSummary)) { $releaseSummary = "Améliorations de Local IA Runner" }
+          $changeSection = if ([string]::IsNullOrWhiteSpace($commitBody)) {
+            "- $releaseSummary"
+          } else {
+            "### $releaseSummary`n`n$commitBody"
           }
 
           $versionNumbers = @($releases | ForEach-Object {
@@ -94,26 +77,17 @@ jobs:
           $notes = @"
           ## Nouveautés de Local IA Runner $version
 
-          Cette version ajoute la gestion des images générées dans les projets de code. Le modèle peut lister les images du dossier de sortie configuré, les copier dans son projet, ou les renommer et déplacer dans le dossier d'images ou le projet. Les opérations restent limitées à ces dossiers et ne remplacent pas les fichiers existants.
-
-          Les délais sont réglables dans les paramètres, section **Délais des outils** : délai d'inactivité de génération et durée maximale d'exécution Python.
-
-          Les mises à jour sont vérifiées depuis GitHub au démarrage, téléchargées et validées par SHA-256, puis appliquées à la fermeture de l'application.
-
-          L'application exécute localement les modèles de texte GGUF avec llama.cpp et génère des images avec stable-diffusion.cpp. Elle comprend les moteurs Windows x64, sans inclure les modèles IA.
+          $changeSection
 
           ## Téléchargements
 
-          - `LocalIARunner-Setup-x64.exe` : installateur Windows 10/11 x64.
-          - `LocalIARunner-Portable-x64-$version.zip` : version portable à extraire et lancer, sans installation.
+          - `LocalIARunner-Setup-x64.exe` : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.
+          - `LocalIARunner-Portable-x64-$version.zip` : version portable à extraire et lancer.
 
-          Les modèles doivent être téléchargés séparément ou déjà présents sur l'ordinateur. L'interface est en français.
-
-          Build du commit $env:GITHUB_SHA.
+          Les modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.
           "@
 
           $existingRelease = $releases | Where-Object { $_.tagName -eq $tag }
-
           if ($existingRelease) {
             gh release upload $tag $installer $portable --clobber
             if ($LASTEXITCODE -ne 0) { throw "Unable to upload release assets." }
@@ -122,5 +96,40 @@ jobs:
           else {
             gh release create $tag $installer $portable --title "Local IA Runner $version" --notes $notes --target $env:GITHUB_SHA --latest
           }
-
           if ($LASTEXITCODE -ne 0) { throw "GitHub release publication failed (gh exit code $LASTEXITCODE)." }
+
+          $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $portableHash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash.ToLowerInvariant()
+          $installerSize = [long](Get-Item -LiteralPath $installer).Length
+          $portableSize = [long](Get-Item -LiteralPath $portable).Length
+          $manifest = [ordered]@{
+            tag_name = $tag
+            html_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/$tag"
+            body = $notes
+            assets = @(
+              [ordered]@{
+                name = "LocalIARunner-Setup-x64.exe"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Setup-x64.exe"
+                digest = "sha256:$installerHash"
+                size = $installerSize
+              },
+              [ordered]@{
+                name = "LocalIARunner-Portable-x64-$version.zip"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Portable-x64-$version.zip"
+                digest = "sha256:$portableHash"
+                size = $portableSize
+              }
+            )
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath 'latest-release.json' -Encoding utf8
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- latest-release.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "[skip ci] Update latest release manifest"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to commit the latest-release manifest." }
+            git push origin "HEAD:$env:GITHUB_REF_NAME"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to publish the latest-release manifest." }
+          }

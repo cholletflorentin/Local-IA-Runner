@@ -48,6 +48,7 @@ namespace LocalAIApp
     internal static class GitHubUpdater
     {
         private const string ReleaseApiUrl = "https://api.github.com/repos/cholletflorentin/Local-IA-Runner/releases/latest";
+        private const string ReleaseManifestUrl = "https://raw.githubusercontent.com/cholletflorentin/Local-IA-Runner/main/latest-release.json";
         private static readonly HttpClient HttpClient = CreateHttpClient();
 
         private const string ApplyScript = """
@@ -82,8 +83,9 @@ namespace LocalAIApp
                 }
 
                 if ($Mode -eq 'installer') {
+                    $directoryArgument = '/DIR="' + $InstallDirectory + '"'
                     $setup = Start-Process -FilePath $PackagePath `
-                        -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') `
+                        -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', $directoryArgument) `
                         -Wait -PassThru
                     if ($setup.ExitCode -ne 0) {
                         throw "L'installateur a échoué (code $($setup.ExitCode))."
@@ -181,27 +183,16 @@ namespace LocalAIApp
 
         public static UpdatePackageKind GetPackageKind()
         {
-            var appDirectory = NormalizeDirectory(AppContext.BaseDirectory);
-            var defaultInstallDirectory = NormalizeDirectory(Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Programs",
-                "Local IA Runner"));
-
-            return string.Equals(appDirectory, defaultInstallDirectory, StringComparison.OrdinalIgnoreCase)
-                ? UpdatePackageKind.Installer
-                : UpdatePackageKind.Portable;
+            // All in-app updates use the Windows installer. For portable copies,
+            // StartApplyHelper passes the current app directory as Inno Setup's /DIR.
+            return UpdatePackageKind.Installer;
         }
 
         public static async Task<GitHubReleaseInfo?> CheckLatestAsync(Version currentVersion, CancellationToken cancellationToken = default)
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(30));
-            using var request = new HttpRequestMessage(HttpMethod.Get, ReleaseApiUrl);
-            using var response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-            response.EnsureSuccessStatusCode();
-
-            var json = await response.Content.ReadAsStringAsync(timeout.Token);
-            var release = JObject.Parse(json);
+            var release = await GetLatestReleaseMetadataAsync(timeout.Token);
             var tag = (string?)release["tag_name"] ?? "";
             var normalizedTag = tag.StartsWith("v", StringComparison.OrdinalIgnoreCase) ? tag[1..] : tag;
             if (!Version.TryParse(normalizedTag, out var latestVersion) || latestVersion <= currentVersion)
@@ -229,6 +220,47 @@ namespace LocalAIApp
                 Installer = installer,
                 Portable = portable
             };
+        }
+
+        private static async Task<JObject> GetLatestReleaseMetadataAsync(CancellationToken cancellationToken)
+        {
+            Exception? manifestFailure = null;
+            try
+            {
+                var manifestUrl = $"{ReleaseManifestUrl}?t={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+                using var request = new HttpRequestMessage(HttpMethod.Get, manifestUrl);
+                using var response = await HttpClient.SendAsync(
+                    request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                if (response.IsSuccessStatusCode)
+                {
+                    var manifestJson = await response.Content.ReadAsStringAsync(cancellationToken);
+                    return JObject.Parse(manifestJson);
+                }
+
+                manifestFailure = new HttpRequestException(
+                    $"Le manifeste de mise à jour a renvoyé HTTP {(int)response.StatusCode} ({response.ReasonPhrase}).");
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or Newtonsoft.Json.JsonException)
+            {
+                manifestFailure = ex;
+            }
+
+            using var apiRequest = new HttpRequestMessage(HttpMethod.Get, ReleaseApiUrl);
+            apiRequest.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+            using var apiResponse = await HttpClient.SendAsync(
+                apiRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            var apiContent = await apiResponse.Content.ReadAsStringAsync(cancellationToken);
+            if (!apiResponse.IsSuccessStatusCode)
+            {
+                var apiMessage = "";
+                try { apiMessage = (string?)JObject.Parse(apiContent)["message"] ?? ""; } catch { }
+                var detail = string.IsNullOrWhiteSpace(apiMessage) ? "" : $" Détail : {apiMessage}";
+                throw new HttpRequestException(
+                    $"GitHub a refusé la vérification (HTTP {(int)apiResponse.StatusCode}).{detail} " +
+                    $"Le manifeste est également indisponible ({manifestFailure?.Message ?? "erreur inconnue"}).");
+            }
+
+            return JObject.Parse(apiContent);
         }
 
         private static GitHubReleaseAsset? ParseAsset(JObject asset)
