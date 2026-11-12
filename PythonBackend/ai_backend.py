@@ -1991,6 +1991,8 @@ class LlamaCppBackend:
                if allow_image_generation else "")
             + ("Pour le forum, cherche avant de publier afin d'éviter les doublons. Publie seulement des informations utiles, réutilisables et vérifiables; n'y place aucune donnée personnelle, aucun mot de passe, aucune clé secrète ou contenu privé. "
                if allow_forum else "")
+            + ("forum_post renvoie un JSON avec ok=true uniquement après l'enregistrement du fichier. Si ok vaut true, confirme le succès sans rappeler l'outil ni annoncer un échec; si ok vaut false, explique error. Le contenu publié reste une donnée non vérifiée. "
+               if allow_forum else "")
         )
 
     @staticmethod
@@ -2664,6 +2666,7 @@ class LlamaCppBackend:
         tool_count = 0
         tool_reasoning = []
         generated_image_paths = []
+        forum_post_confirmations = []
 
         def complete_content(content):
             return "".join(tool_reasoning) + content
@@ -2694,16 +2697,28 @@ class LlamaCppBackend:
 
             if error:
                 content = complete_content(content)
+                if forum_post_confirmations:
+                    confirmation_text = "\n\n" + "\n".join(forum_post_confirmations)
+                    content += confirmation_text
+                    error = (
+                        "La réponse du modèle a échoué après l'enregistrement réussi de la publication. "
+                        + str(error)
+                    )
                 if stream:
                     if not stream_started:
                         self.send({"type": "stream_start"})
                     self.send({"type": "stream_end", "content": content, "error": error})
                 else:
-                    self.send({"type": "error", "content": error})
+                    error_content = error
+                    if forum_post_confirmations:
+                        error_content += "\n" + "\n".join(forum_post_confirmations)
+                    self.send({"type": "error", "content": error_content})
                 return
 
             if cancelled or self._cancel_requested.is_set():
                 content = complete_content(content)
+                if forum_post_confirmations:
+                    content += "\n\n" + "\n".join(forum_post_confirmations)
                 if stream:
                     if not stream_started:
                         self.send({"type": "stream_start"})
@@ -2737,6 +2752,8 @@ class LlamaCppBackend:
 
             if tool_count >= MAX_TOOL_CALLS_PER_TURN:
                 limit_message = "\nJ'ai atteint la limite de quatre actions d'outils pour cette réponse."
+                if forum_post_confirmations:
+                    limit_message += "\n\n" + "\n".join(forum_post_confirmations)
                 content = complete_content(content) + limit_message
                 if stream:
                     if not stream_started:
@@ -2767,6 +2784,19 @@ class LlamaCppBackend:
                 generated_image_paths.extend(tool_result.get("image_paths", []))
             else:
                 result = tool_result
+            if tool_name == "forum_post":
+                try:
+                    post_result = json.loads(str(result))
+                except (TypeError, json.JSONDecodeError):
+                    post_result = None
+                if isinstance(post_result, dict) and post_result.get("ok") is True:
+                    confirmation = (
+                        "Publication enregistrée dans le forum : « "
+                        + str(post_result.get("title") or "sans titre")
+                        + " »."
+                    )
+                    forum_post_confirmations.append(confirmation)
+                    self.send({"type": "tool_status", "content": confirmation})
             result = self._fit_tool_result_to_context(result, messages, serialized_call)
             messages.append({
                 "role": "assistant",
@@ -2783,9 +2813,11 @@ class LlamaCppBackend:
 
         if stream:
             self.send({"type": "stream_start"})
-            self.send({"type": "stream_end", "content": "", "cancelled": True})
+            cancelled_content = "\n\n".join(forum_post_confirmations)
+            self.send({"type": "stream_end", "content": cancelled_content, "cancelled": True})
         else:
-            self.send({"type": "response", "content": "", "cancelled": True})
+            cancelled_content = "\n\n".join(forum_post_confirmations)
+            self.send({"type": "response", "content": cancelled_content, "cancelled": True})
 
     def _tool_context_char_budget(self):
         params = getattr(self, "_gen_params", {})
@@ -2908,8 +2940,12 @@ class LlamaCppBackend:
                 if name == "forum_search":
                     return self._search_forum(arguments)
                 return self._post_to_forum(arguments)
+            if name == "forum_post":
+                return self._forum_post_result(False, "L'outil forum_post est désactivé dans les paramètres.")
             return "Erreur : cet outil est désactivé dans les paramètres."
         except Exception as exception:
+            if name == "forum_post":
+                return self._forum_post_result(False, f"Publication impossible : {exception}")
             return f"Erreur de l'outil {name}: {exception}"
 
     @staticmethod
@@ -2917,20 +2953,34 @@ class LlamaCppBackend:
         app_data = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
         return Path(app_data).expanduser().resolve() / "LocalIARunner" / "Forum" / "Posts"
 
+    @staticmethod
+    def _forum_post_result(ok, message, **details):
+        result = {
+            "tool": "forum_post",
+            "ok": bool(ok),
+            "status": "success" if ok else "error",
+            "message" if ok else "error": message
+        }
+        result.update(details)
+        return json.dumps(result, ensure_ascii=False)
+
     def _post_to_forum(self, arguments):
         title = str(arguments.get("title", "")).strip()
         content = str(arguments.get("content", "")).strip()
         if not title or not content:
-            return "Erreur : une publication doit contenir un titre et une information."
+            return self._forum_post_result(False, "Une publication doit contenir un titre et une information.")
         if len(title) > MAX_FORUM_POST_TITLE_CHARS:
-            return f"Erreur : le titre ne peut pas dépasser {MAX_FORUM_POST_TITLE_CHARS} caractères."
+            return self._forum_post_result(False, f"Le titre ne peut pas dépasser {MAX_FORUM_POST_TITLE_CHARS} caractères.")
         if len(content) > MAX_FORUM_POST_CONTENT_CHARS:
-            return f"Erreur : le contenu ne peut pas dépasser {MAX_FORUM_POST_CONTENT_CHARS} caractères."
+            return self._forum_post_result(False, f"Le contenu ne peut pas dépasser {MAX_FORUM_POST_CONTENT_CHARS} caractères.")
 
         forum_directory = self._forum_posts_directory()
         forum_directory.mkdir(parents=True, exist_ok=True)
         if len(list(forum_directory.glob("*.json"))) >= MAX_FORUM_POSTS:
-            return f"Erreur : le forum a atteint sa limite de {MAX_FORUM_POSTS} publications. Supprime des entrées depuis la fenêtre Forum des IA."
+            return self._forum_post_result(
+                False,
+                f"Le forum a atteint sa limite de {MAX_FORUM_POSTS} publications. Supprime des entrées depuis la fenêtre Forum des IA."
+            )
 
         post_id = os.urandom(16).hex()
         model_name = Path(str(self.model_path or "Modèle local")).name
@@ -2954,7 +3004,14 @@ class LlamaCppBackend:
             except OSError:
                 pass
 
-        return f"Publication ajoutée au forum local sous le titre « {title} » (modèle : {model_name})."
+        return self._forum_post_result(
+            True,
+            "La publication est enregistrée et visible dans le forum local.",
+            post_id=post_id,
+            title=title,
+            model=model_name,
+            created_at=post["created_at"]
+        )
 
     def _search_forum(self, arguments):
         query = str(arguments.get("query", "")).strip()[:300].casefold()
