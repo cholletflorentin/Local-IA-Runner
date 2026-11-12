@@ -65,6 +65,8 @@ jobs:
 
           Les délais sont réglables dans les paramètres, section **Délais des outils** : délai d'inactivité de génération et durée maximale d'exécution Python.
 
+          Les mises à jour sont vérifiées depuis GitHub au démarrage, téléchargées et validées par SHA-256, puis appliquées à la fermeture de l'application.
+
           L'application exécute localement les modèles de texte GGUF avec llama.cpp et génère des images avec stable-diffusion.cpp. Elle comprend les moteurs Windows x64, sans inclure les modèles IA.
 
           ## Téléchargements
@@ -95,6 +97,8 @@ jobs:
           Cette version ajoute la gestion des images générées dans les projets de code. Le modèle peut lister les images du dossier de sortie configuré, les copier dans son projet, ou les renommer et déplacer dans le dossier d'images ou le projet. Les opérations restent limitées à ces dossiers et ne remplacent pas les fichiers existants.
 
           Les délais sont réglables dans les paramètres, section **Délais des outils** : délai d'inactivité de génération et durée maximale d'exécution Python.
+
+          Les mises à jour sont vérifiées depuis GitHub au démarrage, téléchargées et validées par SHA-256, puis appliquées à la fermeture de l'application.
 
           L'application exécute localement les modèles de texte GGUF avec llama.cpp et génère des images avec stable-diffusion.cpp. Elle comprend les moteurs Windows x64, sans inclure les modèles IA.
 

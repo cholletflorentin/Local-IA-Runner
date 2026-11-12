@@ -25,6 +25,8 @@ namespace LocalAIApp
         private List<Message> _currentConversation = new();
         private bool _isPythonReady = false;
         private bool _isStartingBackend = false;
+        private bool _updateCheckInProgress = false;
+        private bool _updateHelperLaunched = false;
         private string _selectedModelPath = "";
         private string _modelsFolder = "";
         private bool _isGenerating = false;
@@ -175,6 +177,7 @@ namespace LocalAIApp
             _menuStrip.RestartBackendClicked += OnRestartBackend;
             _menuStrip.SettingsClicked += OnSettings;
             _menuStrip.ImageGeneratorClicked += OnOpenImageGenerator;
+            _menuStrip.CheckForUpdatesClicked += OnCheckForUpdates;
             _menuStrip.ExitClicked += (s, e) => Application.Exit();
             this.Controls.Add(_menuStrip);
             this.MainMenuStrip = _menuStrip;
@@ -189,6 +192,12 @@ namespace LocalAIApp
                 LoadAppSettings();
                 LoadSavedModelsFolder();
                 StartPythonBackend();
+            };
+
+            this.Shown += async (s, e) =>
+            {
+                if (_appSettings.AutoUpdateEnabled)
+                    await CheckForUpdatesAsync(userInitiated: false);
             };
         }
 
@@ -1437,6 +1446,73 @@ namespace LocalAIApp
             }
         }
 
+        private async void OnCheckForUpdates(object sender, EventArgs e)
+        {
+            await CheckForUpdatesAsync(userInitiated: true);
+        }
+
+        private async Task CheckForUpdatesAsync(bool userInitiated)
+        {
+            if (_updateCheckInProgress || _updateHelperLaunched)
+                return;
+
+            _updateCheckInProgress = true;
+            try
+            {
+                _statusBar.SetStatus("Recherche de mises à jour sur GitHub...", StatusType.Info);
+                var currentVersion = GitHubUpdater.GetCurrentVersion();
+                var release = await GitHubUpdater.CheckLatestAsync(currentVersion);
+                if (release == null)
+                {
+                    if (userInitiated)
+                        MessageBox.Show(this, $"Local IA Runner {currentVersion} est à jour.", "Mises à jour",
+                            MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    _statusBar.SetStatus("Application à jour", StatusType.Success);
+                    return;
+                }
+
+                var packageKind = GitHubUpdater.GetPackageKind();
+                var asset = release.GetAsset(packageKind);
+                _statusBar.SetStatus($"Téléchargement de la mise à jour {release.Version}...", StatusType.Info);
+                var progress = new Progress<double>(percent =>
+                {
+                    if (!IsDisposed && _statusBar != null)
+                        _statusBar.SetStatus($"Téléchargement de la mise à jour : {percent:0}%", StatusType.Info);
+                });
+                var packagePath = await GitHubUpdater.DownloadAssetAsync(asset, progress);
+                GitHubUpdater.StartApplyHelper(packagePath);
+                _updateHelperLaunched = true;
+                _statusBar.SetStatus(
+                    $"Mise à jour {release.Version} téléchargée. Elle sera appliquée à la fermeture de l'application.",
+                    StatusType.Success);
+
+                if (userInitiated)
+                {
+                    MessageBox.Show(this,
+                        $"La mise à jour {release.Version} est téléchargée. Elle sera installée automatiquement quand tu fermeras l'application.",
+                        "Mise à jour prête", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                _statusBar.SetStatus("Vérification des mises à jour impossible", StatusType.Warning);
+                if (userInitiated)
+                {
+                    MessageBox.Show(this,
+                        "La mise à jour n'a pas pu être téléchargée ou vérifiée.\n\n" + ex.Message,
+                        "Mise à jour impossible", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                else
+                {
+                    Log("Échec de la mise à jour automatique : " + ex);
+                }
+            }
+            finally
+            {
+                _updateCheckInProgress = false;
+            }
+        }
+
         private void OnOpenImageGenerator(object sender, EventArgs e)
         {
             if (!_isPythonReady)
@@ -1918,6 +1994,7 @@ namespace LocalAIApp
         public string DefaultImageModelPath { get; set; } = "";
         public bool EnableWebAccess { get; set; } = true;
         public bool EnableCodeExecution { get; set; } = false;
+        public bool AutoUpdateEnabled { get; set; } = true;
         public string CodeWorkspace { get; set; } = DefaultCodeWorkspace;
         public float Temperature { get; set; } = 0.7f;
         public float TopP { get; set; } = 0.9f;
@@ -4802,6 +4879,7 @@ namespace LocalAIApp
         public event EventHandler ExitClicked;
         public event EventHandler SettingsClicked;
         public event EventHandler ImageGeneratorClicked;
+        public event EventHandler CheckForUpdatesClicked;
 
         public ModernMenuStrip()
         {
@@ -4823,6 +4901,8 @@ namespace LocalAIApp
             toolsMenu.DropDownItems.Add(new ToolStripSeparator());
             toolsMenu.DropDownItems.Add(CreateItem("Générer une image…", null, (s, e) => ImageGeneratorClicked?.Invoke(this, e)));
             toolsMenu.DropDownItems.Add(CreateItem("Parametres...", "Ctrl+P", (s, e) => SettingsClicked?.Invoke(this, e)));
+            toolsMenu.DropDownItems.Add(new ToolStripSeparator());
+            toolsMenu.DropDownItems.Add(CreateItem("Vérifier les mises à jour…", null, (s, e) => CheckForUpdatesClicked?.Invoke(this, e)));
 
             Items.Add(fileMenu);
             Items.Add(toolsMenu);
@@ -4972,6 +5052,7 @@ namespace LocalAIApp
         private ModernTextBox _defaultImageModelPathTextBox = null!;
         private CheckBox _webAccessCheckBox = null!;
         private CheckBox _codeExecutionCheckBox = null!;
+        private CheckBox _autoUpdateCheckBox = null!;
         private CheckBox _ssdModelMemoryCheckBox = null!;
         private ModernTextBox _codeWorkspaceTextBox = null!;
         private ComboBox _reasoningEffortComboBox = null!;
@@ -5005,6 +5086,7 @@ namespace LocalAIApp
                 DefaultImageModelPath = currentSettings.DefaultImageModelPath ?? "",
                 EnableWebAccess = currentSettings.EnableWebAccess,
                 EnableCodeExecution = currentSettings.EnableCodeExecution,
+                AutoUpdateEnabled = currentSettings.AutoUpdateEnabled,
                 CodeWorkspace = string.IsNullOrWhiteSpace(currentSettings.CodeWorkspace)
                     ? AppSettings.DefaultCodeWorkspace
                     : currentSettings.CodeWorkspace,
@@ -5096,6 +5178,20 @@ namespace LocalAIApp
                 CreateModelPathPicker(_defaultImageModelPathTextBox, BrowseDefaultImageModel),
                 editorBelowTitle: true,
                 height: 112));
+
+            AddSection(content, "MISES À JOUR");
+            _autoUpdateCheckBox = new CheckBox
+            {
+                Text = "Activées",
+                AutoSize = true,
+                ForeColor = ThemeColors.TextPrimary,
+                BackColor = ThemeColors.Surface,
+                FlatStyle = FlatStyle.Flat
+            };
+            content.Controls.Add(CreateSettingCard(
+                "Mise à jour automatique depuis GitHub",
+                "Au démarrage, télécharge la dernière release et vérifie son SHA-256. L'installation s'applique à la fermeture; modèles et données restent en place.",
+                _autoUpdateCheckBox));
 
             AddSection(content, "INSTRUCTIONS ET MÉMOIRE");
             _conversationTitlePromptTextBox = new ModernTextBox
@@ -5527,6 +5623,7 @@ namespace LocalAIApp
             _defaultImageModelPathTextBox.Text = Settings.DefaultImageModelPath ?? "";
             _webAccessCheckBox.Checked = Settings.EnableWebAccess;
             _codeExecutionCheckBox.Checked = Settings.EnableCodeExecution;
+            _autoUpdateCheckBox.Checked = Settings.AutoUpdateEnabled;
             _codeWorkspaceTextBox.Text = Settings.CodeWorkspace ?? AppSettings.DefaultCodeWorkspace;
             _stopSequencesTextBox.Text = Settings.StopSequences ?? "";
             SetNumericValue(_temperatureUpDown, (decimal)Settings.Temperature);
@@ -5559,6 +5656,7 @@ namespace LocalAIApp
             Settings.DefaultImageModelPath = _defaultImageModelPathTextBox.Text.Trim();
             Settings.EnableWebAccess = _webAccessCheckBox.Checked;
             Settings.EnableCodeExecution = _codeExecutionCheckBox.Checked;
+            Settings.AutoUpdateEnabled = _autoUpdateCheckBox.Checked;
             Settings.CodeWorkspace = string.IsNullOrWhiteSpace(_codeWorkspaceTextBox.Text)
                 ? AppSettings.DefaultCodeWorkspace
                 : _codeWorkspaceTextBox.Text.Trim();

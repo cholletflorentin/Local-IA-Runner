@@ -11,6 +11,7 @@ Application Windows WinForms (.NET 10) pour exécuter des modèles de texte GGUF
 - Annulation d'une génération depuis le bouton **Annuler**
 - Conversations sauvegardées dans `%APPDATA%\LocalIARunner\Conversations`
 - Détection des modèles dans un dossier choisi
+- Mise à jour automatique depuis la dernière release GitHub, avec vérification SHA-256
 
 ## Installation
 
@@ -61,6 +62,8 @@ Un appel accompagné d'une phrase est affiché comme texte et n'est pas exécut�
 Quand ces outils sont autorisés, le modèle peut utiliser `list_images` pour parcourir le dossier de sortie configuré dans la fenêtre de génération d'images (par défaut `Pictures\LocalIARunner`), `copy_image` pour copier une image générée dans le dossier du projet et `move_image` pour la renommer/déplacer dans le dossier des images ou vers le projet. Les chemins sont relatifs à ces deux dossiers, les fichiers existants ne sont pas remplacés et les images ne peuvent pas sortir de ces emplacements. Après copie dans le projet, le modèle peut référencer l'image dans son code, par exemple `assets/image.png`.
 
 Dans **Outils / Paramètres / Délais des outils**, tu peux régler le délai d'inactivité d'une génération (30 secondes à 2 heures, 900 secondes par défaut) ainsi que le temps maximal accordé à un script Python (1 seconde à 2 heures, 30 secondes par défaut). L'activité du modèle et la progression des outils réinitialisent le délai d'inactivité.
+
+Les mises à jour sont activées par défaut dans **Outils / Paramètres / Mises à jour**. Au démarrage, l'application vérifie la dernière release GitHub, télécharge le paquet adapté (installateur ou portable) et valide son empreinte SHA-256. Le remplacement des fichiers attend la fermeture normale de l'application; les modèles, conversations et paramètres ne sont pas déplacés. Le menu **Outils / Vérifier les mises à jour** permet de lancer la vérification manuellement.
 
 ## Structure
 
