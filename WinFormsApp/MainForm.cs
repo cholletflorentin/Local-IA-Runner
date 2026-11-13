@@ -896,6 +896,21 @@ namespace LocalAIApp
                             MarkGenerationProgress();
                             _isStreamingResponse = true;
                             break;
+                        case "subagent_forum_clear_request":
+                        {
+                            var decision = MessageBox.Show(
+                                this,
+                                "Le modèle veut lancer un sous-agent. Pour commencer cette nouvelle série de rapports, " +
+                                "le forum temporaire doit être vidé. Les rapports précédents seront supprimés. Autoriser le vidage ?",
+                                "Vider le forum temporaire des sous-agents",
+                                MessageBoxButtons.YesNo,
+                                MessageBoxIcon.Warning,
+                                MessageBoxDefaultButton.Button2);
+                            AcknowledgeSubagentForumClear(
+                                msg.RequestId,
+                                decision == DialogResult.Yes);
+                            break;
+                        }
                         case "tool_status":
                         {
                             MarkGenerationProgress();
@@ -1114,6 +1129,41 @@ namespace LocalAIApp
                 _pendingStreamTokens.Clear();
         }
 
+        private string[] GetAvailableSubagentModelPaths()
+        {
+            var paths = new List<string>();
+            void AddFromFolder(string folder)
+            {
+                if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+                    return;
+                try { paths.AddRange(Directory.GetFiles(folder, "*.gguf", SearchOption.TopDirectoryOnly)); }
+                catch { }
+            }
+
+            AddFromFolder(_modelsFolder);
+            if (!string.IsNullOrWhiteSpace(_modelsFolder) && Directory.Exists(_modelsFolder))
+            {
+                try
+                {
+                    foreach (var subfolder in Directory.GetDirectories(_modelsFolder))
+                        AddFromFolder(subfolder);
+                }
+                catch { }
+            }
+            paths.Add(_selectedModelPath);
+            paths.Add(_appSettings.DefaultTextModelPath);
+
+            return paths
+                .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
+                .Where(path => string.Equals(Path.GetExtension(path), ".gguf", StringComparison.OrdinalIgnoreCase))
+                .Where(path => !IsMmprojFile(path))
+                .Select(path => Path.GetFullPath(path))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(path => string.Equals(path, _selectedModelPath, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+                .Take(64)
+                .ToArray();
+        }
+
         private void OnSendMessage(object sender, EventArgs e)
         {
             if (_imageGenerationActive)
@@ -1222,6 +1272,10 @@ namespace LocalAIApp
                     enable_web_access = _appSettings.EnableWebAccess,
                     enable_code_execution = _appSettings.EnableCodeExecution,
                     enable_forum = _appSettings.EnableForum,
+                    enable_subagents = _appSettings.EnableSubagents,
+                    available_subagent_models = _appSettings.EnableSubagents
+                        ? GetAvailableSubagentModelPaths()
+                        : Array.Empty<string>(),
                     code_workspace = _appSettings.CodeWorkspace,
                     default_image_model_path = _appSettings.DefaultImageModelPath,
                     generation_timeout_seconds = _appSettings.GenerationTimeoutSeconds,
@@ -1820,6 +1874,30 @@ namespace LocalAIApp
             }
         }
 
+        private void AcknowledgeSubagentForumClear(string requestId, bool approved)
+        {
+            try
+            {
+                var json = JsonConvert.SerializeObject(new
+                {
+                    type = "subagent_forum_clear_response",
+                    request_id = requestId,
+                    approved
+                });
+                lock (_pythonInputLock)
+                {
+                    if (_pythonInput == null || _pythonProcess == null || _pythonProcess.HasExited)
+                        return;
+                    _pythonInput.WriteLine(json);
+                    _pythonInput.Flush();
+                }
+            }
+            catch (Exception ex)
+            {
+                LogException("Confirmation du vidage du forum temporaire", ex);
+            }
+        }
+
         private void AcknowledgeConversationTitle(string conversationId)
         {
             try
@@ -2015,6 +2093,7 @@ namespace LocalAIApp
         public bool EnableWebAccess { get; set; } = true;
         public bool EnableCodeExecution { get; set; } = false;
         public bool EnableForum { get; set; } = false;
+        public bool EnableSubagents { get; set; } = false;
         public bool AutoUpdateEnabled { get; set; } = true;
         public string CodeWorkspace { get; set; } = DefaultCodeWorkspace;
         public float Temperature { get; set; } = 0.7f;
@@ -2094,6 +2173,8 @@ namespace LocalAIApp
         public string Source { get; set; }
         [JsonProperty("conversation_id")]
         public string ConversationId { get; set; }
+        [JsonProperty("request_id")]
+        public string RequestId { get; set; }
         [JsonProperty("wait_for_apply")]
         public bool WaitForApply { get; set; }
         public string Model { get; set; }
@@ -5076,6 +5157,7 @@ namespace LocalAIApp
         private CheckBox _webAccessCheckBox = null!;
         private CheckBox _codeExecutionCheckBox = null!;
         private CheckBox _forumEnabledCheckBox = null!;
+        private CheckBox _subagentsEnabledCheckBox = null!;
         private CheckBox _autoUpdateCheckBox = null!;
         private CheckBox _ssdModelMemoryCheckBox = null!;
         private ModernTextBox _codeWorkspaceTextBox = null!;
@@ -5111,6 +5193,7 @@ namespace LocalAIApp
                 EnableWebAccess = currentSettings.EnableWebAccess,
                 EnableCodeExecution = currentSettings.EnableCodeExecution,
                 EnableForum = currentSettings.EnableForum,
+                EnableSubagents = currentSettings.EnableSubagents,
                 AutoUpdateEnabled = currentSettings.AutoUpdateEnabled,
                 CodeWorkspace = string.IsNullOrWhiteSpace(currentSettings.CodeWorkspace)
                     ? AppSettings.DefaultCodeWorkspace
@@ -5286,6 +5369,19 @@ namespace LocalAIApp
                 "Forum partagé des IA",
                 "Désactivé par défaut. Autorise tous les modèles à rechercher et publier des informations dans le forum local partagé. Les publications restent visibles et supprimables dans Outils > Forum des IA.",
                 _forumEnabledCheckBox));
+
+            _subagentsEnabledCheckBox = new CheckBox
+            {
+                Text = "Activé",
+                AutoSize = true,
+                ForeColor = ThemeColors.TextPrimary,
+                BackColor = ThemeColors.Surface,
+                FlatStyle = FlatStyle.Flat
+            };
+            content.Controls.Add(CreateSettingCard(
+                "Sous-agents et mode goal",
+                "Désactivé par défaut. Le modèle principal peut choisir un modèle GGUF local, son prompt et un sous-ensemble des outils déjà activés; il démarre en mode goal et doit appeler goal_met pour terminer. Il peut aussi lancer goal: dans un message. Avant le premier sous-agent d'une requête, l'application demande confirmation avant de vider le forum temporaire des rapports.",
+                _subagentsEnabledCheckBox));
 
             _codeWorkspaceTextBox = new ModernTextBox
             {
@@ -5662,6 +5758,7 @@ namespace LocalAIApp
             _webAccessCheckBox.Checked = Settings.EnableWebAccess;
             _codeExecutionCheckBox.Checked = Settings.EnableCodeExecution;
             _forumEnabledCheckBox.Checked = Settings.EnableForum;
+            _subagentsEnabledCheckBox.Checked = Settings.EnableSubagents;
             _autoUpdateCheckBox.Checked = Settings.AutoUpdateEnabled;
             _codeWorkspaceTextBox.Text = Settings.CodeWorkspace ?? AppSettings.DefaultCodeWorkspace;
             _stopSequencesTextBox.Text = Settings.StopSequences ?? "";
@@ -5696,6 +5793,7 @@ namespace LocalAIApp
             Settings.EnableWebAccess = _webAccessCheckBox.Checked;
             Settings.EnableCodeExecution = _codeExecutionCheckBox.Checked;
             Settings.EnableForum = _forumEnabledCheckBox.Checked;
+            Settings.EnableSubagents = _subagentsEnabledCheckBox.Checked;
             Settings.AutoUpdateEnabled = _autoUpdateCheckBox.Checked;
             Settings.CodeWorkspace = string.IsNullOrWhiteSpace(_codeWorkspaceTextBox.Text)
                 ? AppSettings.DefaultCodeWorkspace

@@ -58,6 +58,14 @@ Dans **Outils / Paramètres / Outils et accès**, active **Forum partagé des IA
 
 Les publications sont conservées sur ce PC dans `%APPDATA%\LocalIARunner\Forum\Posts`. Elles comprennent un titre, un texte, le nom du modèle et la date. Le titre est limité à 120 caractères, le texte à 5 000 caractères, et le forum à 2 000 publications. **Outils / Forum des IA** permet de les consulter, d'en supprimer une ou de vider le forum. Désactiver l'option bloque les outils mais conserve les publications existantes. Après `forum_post`, le modèle reçoit un résultat JSON explicite (`ok: true` après l'enregistrement, `ok: false` en cas d'échec) pour qu'il puisse annoncer le bon état.
 
+### Sous-agents et objectifs
+
+Dans **Outils / Paramètres / Outils et accès**, active **Sous-agents et mode goal**. Le modèle de la conversation devient le contrôleur : il peut choisir un modèle GGUF local, écrire le prompt du sous-agent et lui transmettre un sous-ensemble des outils déjà autorisés dans les paramètres. Un sous-agent peut lui-même être lancé en mode goal. Les sous-agents ne peuvent pas lancer d'autres sous-agents.
+
+Quand le contrôleur lance son premier sous-agent pour une requête, une boîte de dialogue demande avant de vider les anciens rapports temporaires. Si l'utilisateur refuse, aucun sous-agent n'est lancé et le forum est conservé. Les résultats des sous-agents sont ensuite ajoutés au forum temporaire `%APPDATA%\LocalIARunner\Forum\Subagents`; le contrôleur peut les relire avec `subagent_forum_search`. Les sous-agents ne peuvent ni lire les autres rapports, ni modifier ou supprimer le forum. Le forum partagé durable dans `Forum\Posts` reste séparé.
+
+En mode goal, le modèle contrôleur doit appeler `goal_met` avec une réponse finale pour terminer. Une réponse ordinaire déclenche une reprise automatique. Cette option est activée par défaut pour le contrôleur lorsque l'orchestration des sous-agents est activée. Le préfixe `goal:` au début d'un message active aussi le mode goal même lorsque l'orchestration est désactivée. Le délai maximal de génération et le bouton Annuler restent applicables.
+
 Exemples d'appels :
 
 ```text
@@ -99,4 +107,3 @@ LocalAIApp/
   WinFormsApp/Installer/licenses/
   PythonBackend/ai_backend.py
 ```
-
