@@ -1148,20 +1148,11 @@ namespace LocalAIApp
             {
                 if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
                     return;
-                try { paths.AddRange(Directory.GetFiles(folder, "*.gguf", SearchOption.TopDirectoryOnly)); }
+                try { paths.AddRange(Directory.EnumerateFiles(folder, "*.gguf", SearchOption.AllDirectories)); }
                 catch { }
             }
 
             AddFromFolder(_modelsFolder);
-            if (!string.IsNullOrWhiteSpace(_modelsFolder) && Directory.Exists(_modelsFolder))
-            {
-                try
-                {
-                    foreach (var subfolder in Directory.GetDirectories(_modelsFolder))
-                        AddFromFolder(subfolder);
-                }
-                catch { }
-            }
             paths.Add(_selectedModelPath);
             paths.Add(_appSettings.DefaultTextModelPath);
 
@@ -1285,9 +1276,7 @@ namespace LocalAIApp
                     enable_code_execution = _appSettings.EnableCodeExecution,
                     enable_forum = _appSettings.EnableForum,
                     enable_subagents = _appSettings.EnableSubagents,
-                    available_subagent_models = _appSettings.EnableSubagents
-                        ? GetAvailableSubagentModelPaths()
-                        : Array.Empty<string>(),
+                    available_subagent_models = GetAvailableSubagentModelPaths(),
                     code_workspace = _appSettings.CodeWorkspace,
                     default_image_model_path = _appSettings.DefaultImageModelPath,
                     generation_timeout_seconds = _appSettings.GenerationTimeoutSeconds,
@@ -5436,8 +5425,8 @@ namespace LocalAIApp
                 FlatStyle = FlatStyle.Flat
             };
             content.Controls.Add(CreateSettingCard(
-                "Sous-agents et mode goal",
-                "Désactivé par défaut. Le modèle principal peut choisir un modèle GGUF local, son prompt et un sous-ensemble des outils déjà activés; il démarre en mode goal et doit appeler goal_met pour terminer. Il peut aussi lancer goal: dans un message. Avant le premier sous-agent d'une requête, l'application demande confirmation avant de vider le forum temporaire des rapports.",
+                "Autoriser les sous-agents",
+                "Désactivé par défaut. Le modèle peut consulter la liste des modèles locaux. Si cette option est activée, il peut déléguer une tâche en choisissant le modèle, son prompt et ses outils. Le mode goal est indépendant : utilisez goal: au début du message, ou le modèle y passera après le lancement d'un sous-agent. Avant le premier lancement, l'application demande confirmation avant de vider le forum temporaire des rapports.",
                 _subagentsEnabledCheckBox));
 
             _codeWorkspaceTextBox = new ModernTextBox

@@ -14,6 +14,8 @@ namespace LocalAIApp
         [JsonProperty("title")] public string Title { get; set; } = "";
         [JsonProperty("content")] public string Content { get; set; } = "";
         [JsonProperty("model")] public string Model { get; set; } = "";
+        [JsonProperty("objective")] public string Objective { get; set; } = "";
+        [JsonProperty("session_id")] public string SessionId { get; set; } = "";
         [JsonProperty("created_at")] public string CreatedAt { get; set; } = "";
         [JsonIgnore] public string SourcePath { get; set; } = "";
 
@@ -24,18 +26,29 @@ namespace LocalAIApp
     public sealed class ForumForm : Form
     {
         private readonly string _forumDirectory;
+        private readonly string _subagentForumDirectory;
         private readonly ListBox _postsList;
+        private readonly Label _listHeader;
         private readonly TextBox _titleBox;
         private readonly Label _metadataLabel;
         private readonly TextBox _contentBox;
         private readonly Label _statusLabel;
         private readonly Button _deleteButton;
+        private readonly Button _clearButton;
+        private readonly Button _sharedForumButton;
+        private readonly Button _temporaryForumButton;
+        private readonly System.Windows.Forms.Timer _refreshTimer;
+        private bool _showingTemporaryForum;
+        private bool _loadingPosts;
 
         public ForumForm()
         {
             _forumDirectory = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "LocalIARunner", "Forum", "Posts");
+            _subagentForumDirectory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "LocalIARunner", "Forum", "Subagents");
 
             Text = "Forum des IA";
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
@@ -50,13 +63,31 @@ namespace LocalAIApp
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 2,
+                RowCount = 3,
                 Padding = new Padding(12),
                 BackColor = ThemeColors.Background
             };
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
             Controls.Add(root);
+
+            var forumModes = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 1,
+                BackColor = ThemeColors.Background
+            };
+            forumModes.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            forumModes.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            _sharedForumButton = CreateButton("Forum partagé");
+            _sharedForumButton.Click += (s, e) => SetForumMode(showTemporary: false);
+            _temporaryForumButton = CreateButton("Forum temporaire des sous-agents");
+            _temporaryForumButton.Click += (s, e) => SetForumMode(showTemporary: true);
+            forumModes.Controls.Add(_sharedForumButton, 0, 0);
+            forumModes.Controls.Add(_temporaryForumButton, 1, 0);
+            root.Controls.Add(forumModes, 0, 0);
 
             var split = new SplitContainer
             {
@@ -73,7 +104,7 @@ namespace LocalAIApp
                 if (split.Width > split.Panel1MinSize + split.Panel2MinSize + split.SplitterWidth)
                     split.SplitterDistance = Math.Clamp(300, split.Panel1MinSize, split.Width - split.Panel2MinSize - split.SplitterWidth);
             };
-            root.Controls.Add(split, 0, 0);
+            root.Controls.Add(split, 0, 1);
 
             var left = new TableLayoutPanel
             {
@@ -85,14 +116,14 @@ namespace LocalAIApp
             };
             left.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             left.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            left.Controls.Add(new Label
+            _listHeader = new Label
             {
-                Text = "PUBLICATIONS LOCALES",
                 Dock = DockStyle.Fill,
                 ForeColor = ThemeColors.Primary,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold),
                 TextAlign = ContentAlignment.MiddleLeft
-            }, 0, 0);
+            };
+            left.Controls.Add(_listHeader, 0, 0);
             _postsList = new ListBox
             {
                 Dock = DockStyle.Fill,
@@ -173,17 +204,26 @@ namespace LocalAIApp
             _deleteButton = CreateButton("Supprimer");
             _deleteButton.Enabled = false;
             _deleteButton.Click += (s, e) => DeleteSelectedPost();
-            var clearButton = CreateButton("Tout effacer");
-            clearButton.Click += (s, e) => ClearForum();
+            _clearButton = CreateButton("Tout effacer");
+            _clearButton.Click += (s, e) => ClearForum();
             var closeButton = CreateButton("Fermer");
             closeButton.Click += (s, e) => Close();
             actions.Controls.Add(_statusLabel, 0, 0);
             actions.Controls.Add(refreshButton, 1, 0);
             actions.Controls.Add(_deleteButton, 2, 0);
-            actions.Controls.Add(clearButton, 3, 0);
+            actions.Controls.Add(_clearButton, 3, 0);
             actions.Controls.Add(closeButton, 4, 0);
-            root.Controls.Add(actions, 0, 1);
+            root.Controls.Add(actions, 0, 2);
 
+            _refreshTimer = new System.Windows.Forms.Timer { Interval = 1500 };
+            _refreshTimer.Tick += (s, e) =>
+            {
+                if (_showingTemporaryForum && !IsDisposed)
+                    LoadPosts();
+            };
+            _refreshTimer.Start();
+            FormClosed += (s, e) => _refreshTimer.Stop();
+            SetForumMode(showTemporary: false);
             LoadPosts();
         }
 
@@ -197,25 +237,46 @@ namespace LocalAIApp
             Margin = new Padding(4, 0, 4, 0)
         };
 
+        private void SetForumMode(bool showTemporary)
+        {
+            _showingTemporaryForum = showTemporary;
+            _listHeader.Text = showTemporary
+                ? "RAPPORTS TEMPORAIRES DES SOUS-AGENTS"
+                : "PUBLICATIONS LOCALES";
+            _sharedForumButton.BackColor = showTemporary ? ThemeColors.BorderLight : ThemeColors.Primary;
+            _temporaryForumButton.BackColor = showTemporary ? ThemeColors.Primary : ThemeColors.BorderLight;
+            _temporaryForumButton.ForeColor = ThemeColors.TextPrimary;
+            _deleteButton.Enabled = false;
+            _clearButton.Enabled = !showTemporary;
+            LoadPosts();
+        }
+
         private void LoadPosts()
         {
             var posts = new List<ForumPostRecord>();
             var invalidCount = 0;
+            var activeDirectory = _showingTemporaryForum ? _subagentForumDirectory : _forumDirectory;
+            var selectedPath = (_postsList.SelectedItem as ForumPostRecord)?.SourcePath;
             try
             {
-                if (Directory.Exists(_forumDirectory))
+                if (Directory.Exists(activeDirectory))
                 {
-                    foreach (var path in Directory.EnumerateFiles(_forumDirectory, "*.json", SearchOption.TopDirectoryOnly))
+                    foreach (var path in Directory.EnumerateFiles(activeDirectory, "*.json", SearchOption.TopDirectoryOnly))
                     {
                         try
                         {
                             var post = JsonConvert.DeserializeObject<ForumPostRecord>(File.ReadAllText(path));
-                            if (post == null || string.IsNullOrWhiteSpace(post.Title) || string.IsNullOrWhiteSpace(post.Content))
+                            if (post == null || string.IsNullOrWhiteSpace(post.Content)
+                                    || (_showingTemporaryForum
+                                        ? string.IsNullOrWhiteSpace(post.Title) && string.IsNullOrWhiteSpace(post.Objective)
+                                        : string.IsNullOrWhiteSpace(post.Title)))
                             {
                                 invalidCount++;
                                 continue;
                             }
                             post.SourcePath = path;
+                            if (_showingTemporaryForum && string.IsNullOrWhiteSpace(post.Title))
+                                post.Title = string.IsNullOrWhiteSpace(post.Objective) ? "Rapport de sous-agent" : post.Objective;
                             posts.Add(post);
                         }
                         catch
@@ -232,39 +293,56 @@ namespace LocalAIApp
             }
 
             posts.Sort((left, right) => string.Compare(right.CreatedAt, left.CreatedAt, StringComparison.Ordinal));
+            _loadingPosts = true;
             _postsList.BeginUpdate();
             _postsList.Items.Clear();
             foreach (var post in posts)
                 _postsList.Items.Add(post);
+            var selectedIndex = posts.FindIndex(post =>
+                !string.IsNullOrWhiteSpace(selectedPath) &&
+                string.Equals(post.SourcePath, selectedPath, StringComparison.OrdinalIgnoreCase));
+            if (selectedIndex < 0 && posts.Count > 0)
+                selectedIndex = 0;
+            if (selectedIndex >= 0)
+                _postsList.SelectedIndex = selectedIndex;
             _postsList.EndUpdate();
+            _loadingPosts = false;
 
-            _statusLabel.Text = $"{posts.Count} publication(s)" +
+            _statusLabel.Text = (_showingTemporaryForum
+                ? $"{posts.Count} rapport(s) temporaire(s)"
+                : $"{posts.Count} publication(s)") +
                 (invalidCount > 0 ? $" · {invalidCount} fichier(s) illisible(s) ignoré(s)" : "");
-            if (posts.Count > 0)
-                _postsList.SelectedIndex = 0;
-            else
-                ShowSelectedPost();
+            ShowSelectedPost();
         }
 
         private void ShowSelectedPost()
         {
+            if (_loadingPosts)
+                return;
             var post = _postsList.SelectedItem as ForumPostRecord;
-            _deleteButton.Enabled = post != null;
+            _deleteButton.Enabled = post != null && !_showingTemporaryForum;
+            _clearButton.Enabled = !_showingTemporaryForum;
             if (post == null)
             {
                 _titleBox.Text = "Aucune publication";
-                _metadataLabel.Text = "Le forum local est vide.";
+                _metadataLabel.Text = _showingTemporaryForum
+                    ? "Aucun rapport de sous-agent enregistré."
+                    : "Le forum local est vide.";
                 _contentBox.Clear();
                 return;
             }
 
             _titleBox.Text = post.Title;
-            _metadataLabel.Text = $"{post.CreatedAt}  ·  Modèle : {post.Model}";
+            _metadataLabel.Text = _showingTemporaryForum
+                ? $"{post.CreatedAt}  ·  Modèle : {post.Model}  ·  Session : {post.SessionId}"
+                : $"{post.CreatedAt}  ·  Modèle : {post.Model}";
             _contentBox.Text = post.Content;
         }
 
         private void DeleteSelectedPost()
         {
+            if (_showingTemporaryForum)
+                return;
             if (_postsList.SelectedItem is not ForumPostRecord post)
                 return;
             if (MessageBox.Show(this, $"Supprimer « {post.Title} » ?", "Forum des IA",
@@ -288,6 +366,8 @@ namespace LocalAIApp
 
         private void ClearForum()
         {
+            if (_showingTemporaryForum)
+                return;
             if (!Directory.Exists(_forumDirectory))
             {
                 LoadPosts();

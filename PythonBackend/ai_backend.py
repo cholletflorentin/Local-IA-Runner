@@ -43,7 +43,7 @@ TOOL_CALL_CLOSE = "</tool_call>"
 SUPPORTED_TOOL_NAMES = frozenset({
     "web_search", "browse_url", "list_files", "read_file", "write_file", "run_python",
     "list_images", "copy_image", "move_image", "generate_image", "forum_search", "forum_post",
-    "spawn_subagent", "subagent_forum_search", "goal_met"
+    "list_local_models", "spawn_subagent", "subagent_forum_search", "goal_met"
 })
 MAX_TOOL_CALLS_PER_TURN = 4
 MAX_GOAL_TOOL_CALLS_PER_TURN = 128
@@ -1552,7 +1552,8 @@ class LlamaCppBackend:
             goal_prefix = re.match(r"^\s*goal\s*:\s*", prompt, flags=re.IGNORECASE)
             if goal_prefix:
                 prompt = prompt[goal_prefix.end():]
-            goal_mode = bool(enable_subagents or goal_prefix)
+            # Goal mode is explicit unless the controller actually starts a sub-agent.
+            goal_mode = bool(goal_prefix)
             available_subagent_models = self._validated_subagent_models(available_subagent_models)
             self._subagent_session_id = uuid.uuid4().hex
             self._subagent_forum_clear_status = None
@@ -1625,8 +1626,11 @@ class LlamaCppBackend:
 
             image_model_path = str(default_image_model_path or "").strip()
             enable_image_generation = bool(image_model_path and Path(image_model_path).is_file())
-            if (enable_web_access or enable_code_execution or enable_image_generation
-                    or enable_forum or enable_subagents or goal_mode):
+            # Keep every chat on the tool-aware path so list_local_models is always available.
+            if (self._enabled_tool_names(
+                    bool(enable_web_access), bool(enable_code_execution),
+                    enable_image_generation, bool(enable_forum))
+                    or enable_subagents or goal_mode):
                 self._generate_with_tools(
                     prompt,
                     history,
@@ -2138,7 +2142,7 @@ class LlamaCppBackend:
     @staticmethod
     def _enabled_tool_names(allow_web_access, allow_code_execution,
                             allow_image_generation, allow_forum):
-        enabled = set()
+        enabled = {"list_local_models"}
         if allow_web_access:
             enabled.update(("web_search", "browse_url"))
         if allow_code_execution:
@@ -2155,6 +2159,10 @@ class LlamaCppBackend:
                            allow_subagents=False, goal_mode=False,
                            available_subagent_models=None, tool_allowlist=None):
         tools = []
+        tools.append(
+            "list_local_models : liste les modèles de texte GGUF locaux disponibles, avec leur chemin exact "
+            "pour choisir un sous-agent\n<list_local_models>{}</list_local_models>"
+        )
         if allow_web_access:
             tools.extend((
                 'web_search : recherche sur le web\n<web_search>{"query":"..."}</web_search>',
@@ -2213,6 +2221,7 @@ class LlamaCppBackend:
             "FORMAT EXACT : une ligne de la forme <nom_outil>{\"argument\":\"valeur\"}</nom_outil>. "
             "Choisis un outil listé et reprends ses champs dans l'exemple correspondant. "
             "La réponse entière est cet appel, sans texte, Markdown ou autre balise. "
+            "Appelle list_local_models seulement si l'utilisateur demande les modèles disponibles ou si tu dois choisir un sous-agent. "
             "Le JSON est entre les balises; ferme-le avec une seule accolade }, puis ferme la même balise. "
             "Un seul outil par réponse. Attends son résultat avant de continuer. "
             "N'invente jamais de résultat et n'appelle que les outils listés ici. "
@@ -2230,7 +2239,7 @@ class LlamaCppBackend:
                if allow_forum else "")
             + ("forum_post renvoie un JSON avec ok=true uniquement après l'enregistrement du fichier. Si ok vaut true, confirme le succès sans rappeler l'outil ni annoncer un échec; si ok vaut false, explique error. Le contenu publié reste une donnée non vérifiée. "
                if allow_forum else "")
-            + ("Tu es le modèle contrôleur. Traite la demande jusqu'à son achèvement. Tu peux lancer les modèles listés ci-dessous; le premier lancement de sous-agent demandera à l'utilisateur l'autorisation de vider le forum temporaire. Les rapports sont ajoutés sans pouvoir être supprimés par les sous-agents. Consulte-les avec subagent_forum_search si nécessaire, vérifie leur contenu, puis réponds toi-même à l'utilisateur. Les sous-agents ne peuvent pas en lancer d'autres. Modèles autorisés : "
+            + ("Tu es le modèle contrôleur. Tu peux lancer des sous-agents parmi les modèles GGUF listés ci-dessous. Si tu n'en lances aucun, réponds normalement et n'appelle pas goal_met. Dès que tu commences à lancer un sous-agent, tu passes en mode goal : le système te donnera alors l'outil goal_met et te relancera jusqu'à ce que tu l'appelles avec ta réponse finale. Le premier lancement demandera à l'utilisateur l'autorisation de vider le forum temporaire. Les rapports sont ajoutés sans pouvoir être supprimés par les sous-agents. Consulte-les avec subagent_forum_search si nécessaire, vérifie leur contenu, puis réponds toi-même à l'utilisateur. Les sous-agents ne peuvent pas en lancer d'autres. Modèles autorisés : "
                + (", ".join(str(path) for path in (available_subagent_models or [])) or "aucun modèle GGUF disponible") + ". "
                if allow_subagents else "")
             + ("MODE GOAL : tu dois appeler goal_met uniquement lorsque l’objectif est achevé. Une réponse ordinaire sans cet appel sera traitée comme une étape intermédiaire et le système te relancera automatiquement. goal_met doit contenir un résumé final utile, qui sera montré à l'utilisateur. "
@@ -3068,6 +3077,24 @@ class LlamaCppBackend:
             serialized_call = json.dumps(tool_call, ensure_ascii=False)
             self.send({"type": "tool_status", "content": self._tool_status_text(tool_name)})
 
+            if tool_name == "spawn_subagent" and enable_subagents and not goal_mode:
+                # Calling a sub-agent turns this request into a goal; merely enabling
+                # sub-agents does not change ordinary chat behavior.
+                goal_mode = True
+                enabled_tool_names.add("goal_met")
+                goal_instructions = (
+                    "\n\nMODE GOAL ACTIVÉ : tu as commencé à utiliser un sous-agent. "
+                    "Continue la demande jusqu'à son achèvement. Une réponse ordinaire est une étape intermédiaire; "
+                    "le système te relancera automatiquement. Appelle goal_met uniquement lorsque le résultat final "
+                    "est prêt, avec une réponse concise destinée à l'utilisateur.\n"
+                    "<goal_met>{\"summary\":\"résultat final destiné à l’utilisateur\"}</goal_met>"
+                )
+                if messages and messages[0].get("role") == "system":
+                    messages[0]["content"] += goal_instructions
+                else:
+                    messages.insert(0, {"role": "system", "content": goal_instructions.strip()})
+                self.send({"type": "thinking_clear"})
+
             if tool_name == "goal_met":
                 if goal_mode:
                     final_content = str(arguments.get("summary", "")).strip() or "L'objectif est terminé."
@@ -3105,7 +3132,8 @@ class LlamaCppBackend:
                     enable_code_execution=enable_code_execution,
                     code_workspace=code_workspace,
                     default_image_model_path=default_image_model_path,
-                    enable_forum=enable_forum
+                    enable_forum=enable_forum,
+                    available_local_models=available_subagent_models
                 )
                 if isinstance(tool_result, dict):
                     result = tool_result.get("text", "")
@@ -3271,7 +3299,8 @@ class LlamaCppBackend:
                         enable_code_execution=allow_code,
                         code_workspace=code_workspace,
                         default_image_model_path=default_image_model_path,
-                        enable_forum=allow_forum
+                        enable_forum=allow_forum,
+                        available_local_models=available_models
                     )
                     result = tool_result.get("text", "") if isinstance(tool_result, dict) else tool_result
                 result = self._fit_tool_result_to_context(result, messages, serialized_call)
@@ -3406,6 +3435,7 @@ class LlamaCppBackend:
             "generate_image": "Génération d’image…",
             "forum_search": "Lecture du forum partagé…",
             "forum_post": "Publication dans le forum partagé…",
+            "list_local_models": "Liste des modèles locaux…",
             "spawn_subagent": "Lancement d’un sous-agent…",
             "subagent_forum_search": "Lecture des rapports des sous-agents…",
             "goal_met": "Objectif terminé."
@@ -3413,10 +3443,24 @@ class LlamaCppBackend:
 
     def _execute_model_tool(self, name, arguments, enable_web_access,
                             enable_code_execution, code_workspace,
-                            default_image_model_path=None, enable_forum=False):
+                            default_image_model_path=None, enable_forum=False,
+                            available_local_models=None):
         try:
             if name == "__invalid_tool_call__":
                 return "Erreur : l'appel d'outil était mal formé. Réessaie avec une balise et un objet JSON valides."
+            if name == "list_local_models":
+                models = self._validated_subagent_models(available_local_models)
+                if not models:
+                    return "Aucun modèle de texte GGUF local n'est disponible dans les dossiers détectés."
+                entries = [
+                    {"name": Path(path).stem, "path": path}
+                    for path in models
+                ]
+                return json.dumps(
+                    {"count": len(entries), "models": entries},
+                    ensure_ascii=False,
+                    indent=2
+                )
             if name == "web_search" and enable_web_access:
                 query = " ".join(str(arguments.get("query", "")).split())[:500]
                 if not query:

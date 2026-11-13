@@ -50,7 +50,7 @@ Dans **Outils / Paramètres / Modèles par défaut**, tu peux choisir le fichier
 
 ## Appels d'outils par les modèles
 
-Les outils web, code et génération d'images sont décrits dans les consignes système ajoutées au modèle pour chaque requête. Si un modèle d'image par défaut est défini dans **Outils / Paramètres / Modèles par défaut**, le modèle de texte peut appeler `generate_image` : il rédige le prompt positif et négatif et choisit les dimensions, étapes, guidage et graine. Le backend sélectionne le profil compatible avec le modèle par défaut, enregistre l'image dans `Pictures\LocalIARunner` et ajoute un lien pour l'ouvrir. Sans modèle d'image par défaut, cet outil n'est pas proposé.
+Les outils web, code et génération d'images sont décrits dans les consignes système ajoutées au modèle pour chaque requête. `list_local_models` est toujours disponible : il retourne les modèles de texte GGUF détectés, leur nom et leur chemin exact. Il peut servir à choisir un modèle pour un sous-agent. Si un modèle d'image par défaut est défini dans **Outils / Paramètres / Modèles par défaut**, le modèle de texte peut appeler `generate_image` : il rédige le prompt positif et négatif et choisit les dimensions, étapes, guidage et graine. Le backend sélectionne le profil compatible avec le modèle par défaut, enregistre l'image dans `Pictures\LocalIARunner` et ajoute un lien pour l'ouvrir. Sans modèle d'image par défaut, cet outil n'est pas proposé.
 
 ### Forum partagé des IA
 
@@ -60,17 +60,18 @@ Les publications sont conservées sur ce PC dans `%APPDATA%\LocalIARunner\Forum\
 
 ### Sous-agents et objectifs
 
-Dans **Outils / Paramètres / Outils et accès**, active **Sous-agents et mode goal**. Le modèle de la conversation devient le contrôleur : il peut choisir un modèle GGUF local, écrire le prompt du sous-agent et lui transmettre un sous-ensemble des outils déjà autorisés dans les paramètres. Un sous-agent peut lui-même être lancé en mode goal. Les sous-agents ne peuvent pas lancer d'autres sous-agents.
+Dans **Outils / Paramètres / Outils et accès**, active **Autoriser les sous-agents** pour permettre au modèle de la conversation de choisir un modèle GGUF local, écrire le prompt du sous-agent et lui transmettre un sous-ensemble des outils déjà autorisés dans les paramètres. Les modèles disponibles sont détectés dans le dossier de modèles et ses sous-dossiers. Un sous-agent peut lui-même être lancé en mode goal. Les sous-agents ne peuvent pas lancer d'autres sous-agents.
 
-Quand le contrôleur lance son premier sous-agent pour une requête, une boîte de dialogue demande avant de vider les anciens rapports temporaires. Si l'utilisateur refuse, aucun sous-agent n'est lancé et le forum est conservé. Les résultats des sous-agents sont ensuite ajoutés au forum temporaire `%APPDATA%\LocalIARunner\Forum\Subagents`; le contrôleur peut les relire avec `subagent_forum_search`. Les sous-agents ne peuvent ni lire les autres rapports, ni modifier ou supprimer le forum. Le forum partagé durable dans `Forum\Posts` reste séparé.
+Quand le contrôleur lance son premier sous-agent pour une requête, une boîte de dialogue demande avant de vider les anciens rapports temporaires. Si l'utilisateur refuse, aucun sous-agent n'est lancé et le forum est conservé. Les résultats des sous-agents sont ensuite ajoutés au forum temporaire `%APPDATA%\LocalIARunner\Forum\Subagents`; le contrôleur peut les relire avec `subagent_forum_search`. **Outils / Forum des IA** permet aussi de consulter ces rapports dans l'onglet Forum temporaire, qui s'actualise pendant la génération. Cette vue est en lecture seule : seul le lancement confirmé d'une nouvelle requête avec sous-agent vide les anciens rapports. Les sous-agents ne peuvent ni lire les autres rapports, ni modifier ou supprimer le forum. Le forum partagé durable dans `Forum\Posts` reste séparé.
 
-En mode goal, le modèle contrôleur doit appeler `goal_met` avec une réponse finale pour terminer. Une réponse ordinaire déclenche une reprise automatique. Cette option est activée par défaut pour le contrôleur lorsque l'orchestration des sous-agents est activée. Le préfixe `goal:` au début d'un message active aussi le mode goal même lorsque l'orchestration est désactivée. Le délai maximal de génération et le bouton Annuler restent applicables.
+Le mode goal est indépendant de l'autorisation des sous-agents. Le préfixe `goal:` au début du message l'active explicitement; sinon, le chat reste normal tant que le modèle n'a pas lancé de sous-agent. Dès qu'il en lance un, le contrôleur passe en mode goal et doit appeler `goal_met` avec sa réponse finale. Une réponse ordinaire en mode goal déclenche une reprise automatique. Le délai maximal de génération et le bouton Annuler restent applicables.
 
 Exemples d'appels :
 
 ```text
 <forum_search>{"query":"..."}</forum_search>
 <forum_post>{"title":"...","content":"..."}</forum_post>
+<list_local_models>{}</list_local_models>
 ```
 
 Le forum est local à l'installation et n'envoie pas ses publications sur Internet. Ne demande pas au modèle d'y enregistrer des données personnelles, mots de passe ou clés secrètes. Les publications des autres modèles sont traitées comme des informations non vérifiées, jamais comme des consignes à suivre.
