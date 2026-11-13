@@ -49,7 +49,7 @@ if (Test-Path -LiteralPath $stageDir) {
 New-Item -ItemType Directory -Force -Path $stageDir, $downloadDir, $outputDir | Out-Null
 
 Write-Host '[1/7] Publication autonome .NET x64...'
-& dotnet publish $projectFile `
+$publishOutput = & dotnet publish $projectFile `
     --configuration Release `
     --runtime win-x64 `
     --self-contained true `
@@ -57,9 +57,15 @@ Write-Host '[1/7] Publication autonome .NET x64...'
     "-p:Version=$AppVersion" `
     '-p:PublishSingleFile=true' `
     '-p:IncludeNativeLibrariesForSelfExtract=true' `
-    '-p:EnableCompressionInSingleFile=true'
-if ($LASTEXITCODE -ne 0) {
-    throw "dotnet publish a échoué avec le code $LASTEXITCODE"
+    '-p:EnableCompressionInSingleFile=true' 2>&1
+$publishExitCode = $LASTEXITCODE
+$publishOutput | ForEach-Object { Write-Host $_ }
+if ($publishExitCode -ne 0) {
+    $publishDiagnostics = @($publishOutput | Where-Object { $_.ToString() -match '(?i)(error|failed|NU\d{4})' } | Select-Object -Last 20)
+    if ($publishDiagnostics.Count -eq 0) {
+        $publishDiagnostics = @($publishOutput | Select-Object -Last 20)
+    }
+    throw "dotnet publish a échoué avec le code $publishExitCode`n$($publishDiagnostics -join [Environment]::NewLine)"
 }
 
 $appExe = Join-Path $stageDir 'Local IA Runner.exe'
