@@ -30,6 +30,8 @@ namespace LocalAIApp
         private string? _pendingUpdatePackagePath;
         private string _selectedModelPath = "";
         private string _modelsFolder = "";
+        private string[] _discoveredModelPaths = Array.Empty<string>();
+        private System.Threading.CancellationTokenSource? _modelsScanCancellation;
         private bool _isGenerating = false;
         private bool _isStreamingResponse = false;
         private bool _isCancellingGeneration = false;
@@ -176,6 +178,9 @@ namespace LocalAIApp
             _menuStrip.NewConversationClicked += OnNewConversation;
             _menuStrip.OpenFolderClicked += OnOpenConversationsFolder;
             _menuStrip.SetModelsFolderClicked += OnSetModelsFolder;
+            _menuStrip.SearchKnownModelsClicked += (s, e) => ScanModelsFolder(forceQuickScan: true);
+            _menuStrip.SearchAllModelsClicked += (s, e) => ScanModelsFolder(forceFullScan: true);
+            _menuStrip.CancelModelSearchClicked += (s, e) => CancelModelScan();
             _menuStrip.RestartBackendClicked += OnRestartBackend;
             _menuStrip.SettingsClicked += OnSettings;
             _menuStrip.ImageGeneratorClicked += OnOpenImageGenerator;
@@ -232,7 +237,6 @@ namespace LocalAIApp
                     {
                         _modelsFolder = config.ModelsFolder;
                         _sidebarPanel.SetModelsFolder(_modelsFolder);
-                        ScanModelsFolder();
                     }
                 }
                 else
@@ -251,9 +255,12 @@ namespace LocalAIApp
                 if (Directory.Exists(_modelsFolder))
                 {
                     _sidebarPanel.SetModelsFolder(_modelsFolder);
-                    ScanModelsFolder();
                 }
             }
+
+            // The quick scan also checks common local-model folders when no
+            // custom model directory has been selected.
+            ScanModelsFolder();
         }
 
         private void SaveModelsFolder()
@@ -332,112 +339,100 @@ namespace LocalAIApp
             ScanModelsFolder();
         }
 
-        private void ScanModelsFolder()
+        private void ScanModelsFolder(bool forceFullScan = false, bool forceQuickScan = false)
         {
+            var modelFolder = _modelsFolder ?? "";
+            var searchAllDrives = forceFullScan || (!forceQuickScan && _appSettings.SearchAllDrivesForModels);
+            var defaultTextModelPath = _appSettings.DefaultTextModelPath ?? "";
+            var scanCancellation = new System.Threading.CancellationTokenSource();
+            var previousScan = System.Threading.Interlocked.Exchange(ref _modelsScanCancellation, scanCancellation);
+            previousScan?.Cancel();
+            var cancellationToken = scanCancellation.Token;
+
             _sidebarPanel.SetModelsLoading(true);
-            _statusBar.SetStatus("Scan du dossier modeles...", StatusType.Info);
-            
-            // Debug - immediate visible feedback
-            
+            _statusBar.SetStatus(
+                searchAllDrives
+                    ? "Recherche complète des modèles depuis les racines des lecteurs fixes…"
+                    : "Recherche rapide dans le dossier choisi et les emplacements connus…",
+                StatusType.Info);
+
             Task.Run(() =>
             {
                 try
                 {
                     var models = new List<LocalModelInfo>();
                     var skippedMmprojCount = 0;
-                    
-                    try
+
+                    if (Directory.Exists(modelFolder))
                     {
-                    var folderExists = Directory.Exists(_modelsFolder);
-                    
-                    if (!folderExists)
-                    {
-                        BeginInvoke(new Action(() => _chatPanel.AddSystemMessage("Dossier introuvable: " + _modelsFolder, MessageType.Warning)));
-                    }
-                    else
-                    {
-                        // 1. Scan ROOT folder for Transformers models (models directly in root)
-                        var rootModel = DetectModel(_modelsFolder);
-                        if (rootModel != null)
-                        {
-                            models.Add(rootModel);
-                        }
-                        
-                        // 2. Scan immediate subdirectories for Transformers models
-                        var dirs = Directory.GetDirectories(_modelsFolder);
-                        
-                        foreach (var dir in dirs)
-                        {
-                            var modelInfo = DetectModel(dir);
-                            if (modelInfo != null)
-                            {
-                                models.Add(modelInfo);
-                            }
-                            else
-                            {
-                                Invoke(() => _chatPanel.AddSystemMessage("Pas de modèle dans: " + Path.GetFileName(dir), MessageType.Info));
-                            }
-                        }
-                        
-                        // 2. Scan for GGUF files - only 2 levels deep
-                        var ggufFiles = new List<string>();
                         try
                         {
-                            // Level 1: directly in models folder
-                            var level1 = Directory.GetFiles(_modelsFolder, "*.gguf", SearchOption.TopDirectoryOnly);
-                            ggufFiles.AddRange(level1);
-                            
-                            
-                            // Level 2: in immediate subdirectories
-                            foreach (var subDir in dirs)
-                            {
-                                try
-                                {
-                                    var level2 = Directory.GetFiles(subDir, "*.gguf", SearchOption.TopDirectoryOnly);
-                                    ggufFiles.AddRange(level2);
-                                    if (level2.Length > 0)
-                                    {
-                                    }
-                                        
-                                }
-                                catch { }
-                            }
+                            var rootModel = DetectModel(modelFolder);
+                            if (rootModel != null)
+                                models.Add(rootModel);
                         }
-                        catch (Exception ex)
+                        catch { }
+
+                        string[] subdirectories;
+                        try { subdirectories = Directory.GetDirectories(modelFolder); }
+                        catch { subdirectories = Array.Empty<string>(); }
+
+                        foreach (var directory in subdirectories)
                         {
-                        }
-                        
-                        foreach (var file in ggufFiles)
-                        {
+                            cancellationToken.ThrowIfCancellationRequested();
                             try
                             {
-                                if (IsMmprojFile(file))
-                                {
-                                    skippedMmprojCount++;
-                                    continue;
-                                }
-
-                                models.Add(new LocalModelInfo
-                                {
-                                    Name = Path.GetFileNameWithoutExtension(file),
-                                    Path = file,
-                                    Type = ModelType.GGUF,
-                                    Size = new FileInfo(file).Length,
-                                    Folder = Path.GetDirectoryName(file)
-                                });
+                                var modelInfo = DetectModel(directory);
+                                if (modelInfo != null)
+                                    models.Add(modelInfo);
                             }
                             catch { }
                         }
                     }
-                }
-                catch (Exception ex)
-                {
-                }
 
+                    var searchRoots = GetModelSearchRoots(modelFolder, searchAllDrives);
+                    var modelPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var file in EnumerateGgufModels(searchRoots, cancellationToken, visitedDirectories =>
+                    {
+                        if (!searchAllDrives || IsDisposed || !IsHandleCreated)
+                            return;
+                        try
+                        {
+                            BeginInvoke(new Action(() =>
+                            {
+                                if (ReferenceEquals(_modelsScanCancellation, scanCancellation))
+                                    _statusBar.SetStatus(
+                                        $"Recherche complète en cours… {visitedDirectories:N0} dossiers parcourus.",
+                                        StatusType.Info);
+                            }));
+                        }
+                        catch { }
+                    }))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        try
+                        {
+                            var fullPath = Path.GetFullPath(file);
+                            if (!modelPaths.Add(fullPath))
+                                continue;
+                            if (IsMmprojFile(fullPath))
+                            {
+                                skippedMmprojCount++;
+                                continue;
+                            }
 
-                BeginInvoke(new Action(() => 
-                {
-                    var defaultTextModelPath = _appSettings.DefaultTextModelPath;
+                            models.Add(new LocalModelInfo
+                            {
+                                Name = Path.GetFileNameWithoutExtension(fullPath),
+                                Path = fullPath,
+                                Type = ModelType.GGUF,
+                                Size = new FileInfo(fullPath).Length,
+                                Folder = Path.GetDirectoryName(fullPath)
+                            });
+                        }
+                        catch { }
+                    }
+
                     if (File.Exists(defaultTextModelPath) &&
                         string.Equals(Path.GetExtension(defaultTextModelPath), ".gguf", StringComparison.OrdinalIgnoreCase) &&
                         !IsMmprojFile(defaultTextModelPath) &&
@@ -448,7 +443,7 @@ namespace LocalAIApp
                             models.Add(new LocalModelInfo
                             {
                                 Name = Path.GetFileNameWithoutExtension(defaultTextModelPath),
-                                Path = defaultTextModelPath,
+                                Path = Path.GetFullPath(defaultTextModelPath),
                                 Type = ModelType.GGUF,
                                 Size = new FileInfo(defaultTextModelPath).Length,
                                 Folder = Path.GetDirectoryName(defaultTextModelPath) ?? ""
@@ -457,44 +452,257 @@ namespace LocalAIApp
                         catch { }
                     }
 
+                    cancellationToken.ThrowIfCancellationRequested();
                     models = models
                         .GroupBy(model => model.Path, StringComparer.OrdinalIgnoreCase)
                         .Select(group => group.First())
                         .ToList();
-                    var preferredModel = models.FirstOrDefault(model =>
-                            model.Type == ModelType.GGUF &&
-                            string.Equals(model.Path, _selectedModelPath, StringComparison.OrdinalIgnoreCase))
-                        ?? models.FirstOrDefault(model =>
-                            model.Type == ModelType.GGUF &&
-                            string.Equals(model.Path, defaultTextModelPath, StringComparison.OrdinalIgnoreCase))
-                        ?? models.FirstOrDefault(model => model.Type == ModelType.GGUF);
-                    if (preferredModel == null && !_isGenerating && !_imageGenerationActive)
-                    {
-                        if (!string.IsNullOrWhiteSpace(_selectedModelPath))
-                            RequestCurrentModelUnload();
-                        _selectedModelPath = "";
-                        _selectedModelName = "";
-                        _inputPanel.SetModelSelected(false);
-                    }
-                    _sidebarPanel.LoadModels(models, preferredModel?.Path);
-                    _sidebarPanel.SetModelsLoading(false);
-                    _statusBar.SetStatus(models.Count + " modele(s) trouve(s)", models.Count > 0 ? StatusType.Success : StatusType.Warning);
 
-                    if (skippedMmprojCount > 0)
+                    if (IsDisposed || !IsHandleCreated)
                     {
-                        _chatPanel.AddSystemMessage(
-                            $"{skippedMmprojCount} fichier(s) mmproj ignoré(s) : ce sont des projecteurs multimodaux, pas des modèles principaux. Le backend actuel ne prend pas encore en charge leur chargement.",
-                            MessageType.Info);
+                        System.Threading.Interlocked.CompareExchange(ref _modelsScanCancellation, null, scanCancellation);
+                        scanCancellation.Dispose();
+                        return;
                     }
-                    
-                }));
-            }
-            catch (Exception taskEx)
-            {
-            }
-        });
+
+                    BeginInvoke(new Action(() =>
+                    {
+                        if (!ReferenceEquals(
+                                System.Threading.Interlocked.CompareExchange(ref _modelsScanCancellation, null, scanCancellation),
+                                scanCancellation))
+                        {
+                            scanCancellation.Dispose();
+                            return;
+                        }
+
+                        try
+                        {
+                            _discoveredModelPaths = models
+                                .Where(model => model.Type == ModelType.GGUF)
+                                .Select(model => model.Path)
+                                .Distinct(StringComparer.OrdinalIgnoreCase)
+                                .ToArray();
+
+                            var preferredModel = models.FirstOrDefault(model =>
+                                    model.Type == ModelType.GGUF &&
+                                    string.Equals(model.Path, _selectedModelPath, StringComparison.OrdinalIgnoreCase))
+                                ?? models.FirstOrDefault(model =>
+                                    model.Type == ModelType.GGUF &&
+                                    string.Equals(model.Path, defaultTextModelPath, StringComparison.OrdinalIgnoreCase))
+                                ?? models
+                                    .Where(model => model.Type == ModelType.GGUF)
+                                    .OrderBy(model => model.Name, StringComparer.OrdinalIgnoreCase)
+                                    .FirstOrDefault();
+
+                            if (preferredModel == null && !_isGenerating && !_imageGenerationActive)
+                            {
+                                if (!string.IsNullOrWhiteSpace(_selectedModelPath))
+                                    RequestCurrentModelUnload();
+                                _selectedModelPath = "";
+                                _selectedModelName = "";
+                                _inputPanel.SetModelSelected(false);
+                            }
+
+                            _sidebarPanel.LoadModels(models, preferredModel?.Path);
+                            _sidebarPanel.SetModelsLoading(false);
+                            var scanLabel = searchAllDrives ? "après la recherche complète" : "dans les emplacements connus";
+                            _statusBar.SetStatus(
+                                $"{models.Count} modèle(s) trouvé(s) {scanLabel}",
+                                models.Count > 0 ? StatusType.Success : StatusType.Warning);
+
+                            if (skippedMmprojCount > 0)
+                            {
+                                _chatPanel.AddSystemMessage(
+                                    $"{skippedMmprojCount} fichier(s) mmproj ignoré(s) : ce sont des projecteurs multimodaux, pas des modèles principaux. Le backend actuel ne prend pas encore en charge leur chargement.",
+                                    MessageType.Info);
+                            }
+                        }
+                        finally
+                        {
+                            scanCancellation.Dispose();
+                        }
+                    }));
+                }
+                catch (OperationCanceledException)
+                {
+                    var wasCurrentScan = ReferenceEquals(
+                        System.Threading.Interlocked.CompareExchange(ref _modelsScanCancellation, null, scanCancellation),
+                        scanCancellation);
+                    if (wasCurrentScan && !IsDisposed && IsHandleCreated)
+                    {
+                        try
+                        {
+                            BeginInvoke(new Action(() =>
+                            {
+                                _sidebarPanel.SetModelsLoading(false);
+                                _statusBar.SetStatus("Recherche des modèles annulée.", StatusType.Warning);
+                            }));
+                        }
+                        catch { }
+                    }
+                    scanCancellation.Dispose();
+                }
+                catch (Exception exception)
+                {
+                    var wasCurrentScan = ReferenceEquals(
+                        System.Threading.Interlocked.CompareExchange(ref _modelsScanCancellation, null, scanCancellation),
+                        scanCancellation);
+                    if (wasCurrentScan && !IsDisposed && IsHandleCreated)
+                    {
+                        try
+                        {
+                            BeginInvoke(new Action(() =>
+                            {
+                                _sidebarPanel.SetModelsLoading(false);
+                                _statusBar.SetStatus("Recherche des modèles impossible : " + exception.Message, StatusType.Error);
+                            }));
+                        }
+                        catch { }
+                    }
+                    scanCancellation.Dispose();
+                }
+            });
         }
 
+        private void CancelModelScan()
+        {
+            var activeScan = System.Threading.Interlocked.Exchange(ref _modelsScanCancellation, null);
+            if (activeScan == null)
+            {
+                _statusBar.SetStatus("Aucune recherche de modèles n'est en cours.", StatusType.Info);
+                return;
+            }
+
+            activeScan.Cancel();
+            _sidebarPanel.SetModelsLoading(false);
+            _statusBar.SetStatus("Annulation de la recherche des modèles…", StatusType.Warning);
+        }
+
+        private static List<string> GetModelSearchRoots(string selectedFolder, bool searchAllDrives)
+        {
+            var roots = new List<string>();
+            var normalizedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void AddRoot(string path)
+            {
+                if (string.IsNullOrWhiteSpace(path))
+                    return;
+                try
+                {
+                    var fullPath = Path.GetFullPath(path);
+                    if (Directory.Exists(fullPath) && normalizedRoots.Add(fullPath))
+                        roots.Add(fullPath);
+                }
+                catch { }
+            }
+
+            AddRoot(selectedFolder);
+
+            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var roamingAppData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+
+            AddRoot(Path.Combine(userProfile, ".lmstudio", "models"));
+            AddRoot(Path.Combine(userProfile, "LM Studio", "models"));
+            AddRoot(Path.Combine(localAppData, "LM Studio", "models"));
+            var janRoot = Path.Combine(roamingAppData, "Jan");
+            AddRoot(Path.Combine(janRoot, "data", "llamacpp", "models"));
+            AddRoot(Path.Combine(janRoot, "data", "models"));
+            AddRoot(Path.Combine(localAppData, "Jan", "data", "llamacpp", "models"));
+            AddRoot(Path.Combine(localAppData, "Jan", "data", "models"));
+            try
+            {
+                var janSettingsFile = Path.Combine(janRoot, "settings.json");
+                if (File.Exists(janSettingsFile))
+                {
+                    var janSettings = JObject.Parse(File.ReadAllText(janSettingsFile));
+                    var janDataFolder = (string?)janSettings["data_folder"];
+                    if (!string.IsNullOrWhiteSpace(janDataFolder))
+                    {
+                        AddRoot(Path.Combine(janDataFolder, "llamacpp", "models"));
+                        AddRoot(Path.Combine(janDataFolder, "models"));
+                    }
+                }
+            }
+            catch { }
+            AddRoot(Path.Combine(localAppData, "nomic.ai", "GPT4All"));
+            AddRoot(Path.Combine(userProfile, "text-generation-webui", "models"));
+            AddRoot(Path.Combine(userProfile, "pinokio", "api", "text-generation-webui.git", "models"));
+            AddRoot(Path.Combine(userProfile, "pinokio", "api", "koboldcpp.git", "models"));
+            AddRoot(Path.Combine(userProfile, "Models"));
+            AddRoot(Path.Combine(documents, "LocalAIModels"));
+
+            try
+            {
+                foreach (var drive in DriveInfo.GetDrives())
+                {
+                    try
+                    {
+                        if (!drive.IsReady)
+                            continue;
+
+                        if (drive.DriveType == DriveType.Fixed)
+                            AddRoot(Path.Combine(drive.RootDirectory.FullName, "models"));
+
+                        if (searchAllDrives && drive.DriveType is DriveType.Fixed or DriveType.Removable)
+                            AddRoot(drive.RootDirectory.FullName);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+
+            return roots;
+        }
+
+        private static IEnumerable<string> EnumerateGgufModels(
+            IEnumerable<string> roots,
+            System.Threading.CancellationToken cancellationToken,
+            Action<int>? progress = null)
+        {
+            var pendingDirectories = new Stack<string>(roots.Reverse());
+            var visitedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var directoriesVisited = 0;
+
+            while (pendingDirectories.Count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var directory = pendingDirectories.Pop();
+                string fullDirectory;
+                try { fullDirectory = Path.GetFullPath(directory); }
+                catch { continue; }
+                if (!visitedDirectories.Add(fullDirectory))
+                    continue;
+
+                string[] modelFiles;
+                try { modelFiles = Directory.GetFiles(fullDirectory, "*.gguf", SearchOption.TopDirectoryOnly); }
+                catch { modelFiles = Array.Empty<string>(); }
+                foreach (var file in modelFiles)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    yield return file;
+                }
+
+                string[] children;
+                try { children = Directory.GetDirectories(fullDirectory, "*", SearchOption.TopDirectoryOnly); }
+                catch { children = Array.Empty<string>(); }
+                foreach (var child in children)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    try
+                    {
+                        if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) == 0)
+                            pendingDirectories.Push(child);
+                    }
+                    catch { }
+                }
+
+                directoriesVisited++;
+                if (directoriesVisited % 500 == 0)
+                    progress?.Invoke(directoriesVisited);
+            }
+        }
         private LocalModelInfo DetectModel(string folder)
         {
             try
@@ -1141,18 +1349,10 @@ namespace LocalAIApp
                 _pendingStreamTokens.Clear();
         }
 
-        private string[] GetAvailableSubagentModelPaths()
+        private string[] GetAvailableLocalModelPaths()
         {
             var paths = new List<string>();
-            void AddFromFolder(string folder)
-            {
-                if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
-                    return;
-                try { paths.AddRange(Directory.EnumerateFiles(folder, "*.gguf", SearchOption.AllDirectories)); }
-                catch { }
-            }
-
-            AddFromFolder(_modelsFolder);
+            paths.AddRange(_discoveredModelPaths);
             paths.Add(_selectedModelPath);
             paths.Add(_appSettings.DefaultTextModelPath);
 
@@ -1163,9 +1363,11 @@ namespace LocalAIApp
                 .Select(path => Path.GetFullPath(path))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(path => string.Equals(path, _selectedModelPath, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-                .Take(64)
                 .ToArray();
         }
+
+        private string[] GetAvailableSubagentModelPaths() =>
+            GetAvailableLocalModelPaths().Take(64).ToArray();
 
         private void OnSendMessage(object sender, EventArgs e)
         {
@@ -1276,6 +1478,7 @@ namespace LocalAIApp
                     enable_code_execution = _appSettings.EnableCodeExecution,
                     enable_forum = _appSettings.EnableForum,
                     enable_subagents = _appSettings.EnableSubagents,
+                    available_local_models = GetAvailableLocalModelPaths(),
                     available_subagent_models = GetAvailableSubagentModelPaths(),
                     code_workspace = _appSettings.CodeWorkspace,
                     default_image_model_path = _appSettings.DefaultImageModelPath,
@@ -1497,9 +1700,14 @@ namespace LocalAIApp
             {
                 if (settingsForm.ShowDialog(this) == DialogResult.OK)
                 {
+                    var searchModeChanged =
+                        _appSettings.SearchAllDrivesForModels != settingsForm.Settings.SearchAllDrivesForModels ||
+                        !string.Equals(_appSettings.DefaultTextModelPath, settingsForm.Settings.DefaultTextModelPath, StringComparison.OrdinalIgnoreCase);
                     _appSettings = settingsForm.Settings;
                     SaveAppSettings();
                     _statusBar.SetStatus("Parametres sauvegardes", StatusType.Success);
+                    if (searchModeChanged)
+                        ScanModelsFolder();
                 }
             }
         }
@@ -2042,6 +2250,8 @@ namespace LocalAIApp
             }
 
             SaveConversation();
+            var activeModelScan = System.Threading.Interlocked.Exchange(ref _modelsScanCancellation, null);
+            activeModelScan?.Cancel();
             _generationWatchdog?.Dispose();
             _streamRenderTimer.Stop();
             _streamRenderTimer.Dispose();
@@ -2140,6 +2350,7 @@ namespace LocalAIApp
         public bool EnableCodeExecution { get; set; } = false;
         public bool EnableForum { get; set; } = false;
         public bool EnableSubagents { get; set; } = false;
+        public bool SearchAllDrivesForModels { get; set; } = false;
         public bool AutoUpdateEnabled { get; set; } = true;
         public string CodeWorkspace { get; set; } = DefaultCodeWorkspace;
         public float Temperature { get; set; } = 0.7f;
@@ -5023,6 +5234,9 @@ namespace LocalAIApp
         public event EventHandler NewConversationClicked;
         public event EventHandler OpenFolderClicked;
         public event EventHandler SetModelsFolderClicked;
+        public event EventHandler SearchKnownModelsClicked;
+        public event EventHandler SearchAllModelsClicked;
+        public event EventHandler CancelModelSearchClicked;
         public event EventHandler RestartBackendClicked;
         public event EventHandler ExitClicked;
         public event EventHandler SettingsClicked;
@@ -5042,6 +5256,9 @@ namespace LocalAIApp
             fileMenu.DropDownItems.Add(CreateItem("Nouvelle conversation", "Ctrl+N", (s, e) => NewConversationClicked?.Invoke(this, e)));
             fileMenu.DropDownItems.Add(CreateItem("Ouvrir dossier conversations", null, (s, e) => OpenFolderClicked?.Invoke(this, e)));
             fileMenu.DropDownItems.Add(CreateItem("Definir dossier modeles...", null, (s, e) => SetModelsFolderClicked?.Invoke(this, e)));
+            fileMenu.DropDownItems.Add(CreateItem("Rechercher les modèles (rapide)", null, (s, e) => SearchKnownModelsClicked?.Invoke(this, e)));
+            fileMenu.DropDownItems.Add(CreateItem("Rechercher les modèles sur tout le PC…", null, (s, e) => SearchAllModelsClicked?.Invoke(this, e)));
+            fileMenu.DropDownItems.Add(CreateItem("Annuler la recherche des modèles", null, (s, e) => CancelModelSearchClicked?.Invoke(this, e)));
             fileMenu.DropDownItems.Add(new ToolStripSeparator());
             fileMenu.DropDownItems.Add(CreateItem("Quitter", "Alt+F4", (s, e) => ExitClicked?.Invoke(this, e)));
 
@@ -5205,6 +5422,7 @@ namespace LocalAIApp
         private CheckBox _forumEnabledCheckBox = null!;
         private CheckBox _subagentsEnabledCheckBox = null!;
         private CheckBox _autoUpdateCheckBox = null!;
+        private CheckBox _searchAllModelDrivesCheckBox = null!;
         private CheckBox _ssdModelMemoryCheckBox = null!;
         private ModernTextBox _codeWorkspaceTextBox = null!;
         private ComboBox _reasoningEffortComboBox = null!;
@@ -5236,6 +5454,7 @@ namespace LocalAIApp
                 ConversationTitlePrompt = currentSettings.ConversationTitlePrompt ?? AppSettings.DefaultConversationTitlePrompt,
                 DefaultTextModelPath = currentSettings.DefaultTextModelPath ?? "",
                 DefaultImageModelPath = currentSettings.DefaultImageModelPath ?? "",
+                SearchAllDrivesForModels = currentSettings.SearchAllDrivesForModels,
                 EnableWebAccess = currentSettings.EnableWebAccess,
                 EnableCodeExecution = currentSettings.EnableCodeExecution,
                 EnableForum = currentSettings.EnableForum,
@@ -5332,6 +5551,20 @@ namespace LocalAIApp
                 CreateModelPathPicker(_defaultImageModelPathTextBox, BrowseDefaultImageModel),
                 editorBelowTitle: true,
                 height: 112));
+
+            AddSection(content, "RECHERCHE DES MODÈLES");
+            _searchAllModelDrivesCheckBox = new CheckBox
+            {
+                Text = "Recherche complète",
+                AutoSize = true,
+                ForeColor = ThemeColors.TextPrimary,
+                BackColor = ThemeColors.Surface,
+                FlatStyle = FlatStyle.Flat
+            };
+            content.Controls.Add(CreateSettingCard(
+                "Parcourir tous les lecteurs au démarrage",
+                "Désactivé par défaut : le scan rapide consulte le dossier choisi ainsi que les emplacements courants de LM Studio, Jan, GPT4All et d'autres outils. Active cette option pour lancer tout de suite puis au démarrage une recherche depuis la racine des lecteurs fixes; cela peut prendre plusieurs minutes. Le scan s'effectue en arrière-plan et peut être annulé dans Fichier.",
+                _searchAllModelDrivesCheckBox));
 
             AddSection(content, "MISES À JOUR");
             _autoUpdateCheckBox = new CheckBox
@@ -5801,6 +6034,7 @@ namespace LocalAIApp
             _systemPromptTextBox.Text = Settings.SystemPrompt ?? "";
             _defaultTextModelPathTextBox.Text = Settings.DefaultTextModelPath ?? "";
             _defaultImageModelPathTextBox.Text = Settings.DefaultImageModelPath ?? "";
+            _searchAllModelDrivesCheckBox.Checked = Settings.SearchAllDrivesForModels;
             _webAccessCheckBox.Checked = Settings.EnableWebAccess;
             _codeExecutionCheckBox.Checked = Settings.EnableCodeExecution;
             _forumEnabledCheckBox.Checked = Settings.EnableForum;
@@ -5836,6 +6070,7 @@ namespace LocalAIApp
             Settings.SystemPrompt = _systemPromptTextBox.Text;
             Settings.DefaultTextModelPath = _defaultTextModelPathTextBox.Text.Trim();
             Settings.DefaultImageModelPath = _defaultImageModelPathTextBox.Text.Trim();
+            Settings.SearchAllDrivesForModels = _searchAllModelDrivesCheckBox.Checked;
             Settings.EnableWebAccess = _webAccessCheckBox.Checked;
             Settings.EnableCodeExecution = _codeExecutionCheckBox.Checked;
             Settings.EnableForum = _forumEnabledCheckBox.Checked;

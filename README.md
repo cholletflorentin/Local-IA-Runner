@@ -11,7 +11,8 @@ Application Windows WinForms (.NET 10) pour exécuter des modèles de texte GGUF
 - Aperçu, progression, annulation et sauvegarde des images générées
 - Annulation d'une génération depuis le bouton **Annuler**
 - Conversations sauvegardées dans `%APPDATA%\LocalIARunner\Conversations`
-- Détection des modèles dans un dossier choisi
+- Détection rapide des GGUF dans le dossier choisi, LM Studio, Jan, GPT4All et d'autres emplacements locaux courants
+- Recherche complète facultative des modèles GGUF depuis la racine de tous les lecteurs fixes
 - Mise à jour automatique depuis la dernière release GitHub, avec vérification SHA-256
 
 ## Installation
@@ -43,6 +44,8 @@ Pour développer et lancer directement depuis les sources, compiler `WinFormsApp
 1. Pour discuter, choisir le dossier contenant les modèles GGUF, sélectionner un fichier `.gguf` puis envoyer un message.
 2. Pour générer une image, ouvrir **Outils > Générer une image**, choisir le dossier de modèles stable-diffusion.cpp puis cliquer sur **Analyser les modèles**.
 3. Choisir un profil et ses composants, écrire un prompt et régler les dimensions, le nombre d'étapes et le guidage. L'application affiche la progression, permet d'annuler et enregistre l'image dans le dossier de sortie choisi.
+
+Pour les modèles de texte, le scan rapide consulte le dossier choisi et les emplacements habituels de LM Studio (`%USERPROFILE%\.lmstudio\models`), Jan, GPT4All, text-generation-webui et Pinokio. **Fichier > Rechercher les modèles (rapide)** relance ce scan ciblé. **Fichier > Rechercher les modèles sur tout le PC** parcourt les lecteurs locaux fixes et amovibles depuis leur racine; la recherche continue en arrière-plan et peut être arrêtée depuis **Fichier > Annuler la recherche des modèles**. Dans les paramètres, **Parcourir tous les lecteurs au démarrage** active ce mode complet aussi au démarrage et lors de l'actualisation. Il est désactivé par défaut. Les lecteurs réseau, les dossiers auxquels Windows refuse l'accès et les liens de jonction sont ignorés. Seuls les fichiers GGUF compatibles avec le chargement local sont répertoriés; aucun fichier n'est déplacé ni copié.
 
 Les modèles d'images (`.safetensors`, `.gguf`, `.sft`, `.ckpt`, `.pt`, `.pth` et `.bin`) sont recherchés dans les catégories reconnues par stable-diffusion.cpp, comme `checkpoints`, `diffusion_models`, `text_encoders` et `vae`, y compris dans leurs sous-dossiers. Les fichiers de modèle posés directement à la racine d'un dossier sélectionné sont aussi détectés sans être déplacés ni copiés. L'application affiche le chemin relatif et sélectionne automatiquement un profil compatible avec les fichiers trouvés. Les moteurs fournis sont placés à côté de l'application dans `stable-diffusion.cpp\windows-vulkan` et `stable-diffusion.cpp\windows-cpu`; les modèles et images restent dans les dossiers choisis par l'utilisateur. Les fichiers `.mmproj` du navigateur de modèles de chat sont des projecteurs multimodaux auxiliaires, pas des modèles principaux; ils sont ignorés et ne peuvent pas être chargés seuls.
 

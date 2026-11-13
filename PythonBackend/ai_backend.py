@@ -1532,7 +1532,7 @@ class LlamaCppBackend:
                  default_image_model_path=None, generation_timeout_seconds=900,
                  code_execution_timeout_seconds=30, generated_images_directory=None,
                  enable_forum=False, enable_subagents=False,
-                 available_subagent_models=None):
+                 available_subagent_models=None, available_local_models=None):
         """Generate through the persistent server; weights stay loaded between turns."""
         try:
             try:
@@ -1555,6 +1555,9 @@ class LlamaCppBackend:
             # Goal mode is explicit unless the controller actually starts a sub-agent.
             goal_mode = bool(goal_prefix)
             available_subagent_models = self._validated_subagent_models(available_subagent_models)
+            available_local_models = self._validated_subagent_models(
+                available_local_models if available_local_models is not None else available_subagent_models
+            )
             self._subagent_session_id = uuid.uuid4().hex
             self._subagent_forum_clear_status = None
 
@@ -1644,6 +1647,7 @@ class LlamaCppBackend:
                     enable_subagents=bool(enable_subagents),
                     goal_mode=goal_mode,
                     available_subagent_models=available_subagent_models,
+                    available_local_models=available_local_models,
                     tool_options={
                         "ngl": ngl,
                         "threads": threads,
@@ -2160,8 +2164,9 @@ class LlamaCppBackend:
                            available_subagent_models=None, tool_allowlist=None):
         tools = []
         tools.append(
-            "list_local_models : liste les modèles de texte GGUF locaux disponibles, avec leur chemin exact "
-            "pour choisir un sous-agent\n<list_local_models>{}</list_local_models>"
+            "list_local_models : liste les modèles de texte GGUF locaux disponibles avec leur chemin exact. "
+            "Pour parcourir une longue liste, utilise offset et limit\n"
+            "<list_local_models>{\"offset\":0,\"limit\":50}</list_local_models>"
         )
         if allow_web_access:
             tools.extend((
@@ -2907,7 +2912,8 @@ class LlamaCppBackend:
                              enable_code_execution, code_workspace,
                              enable_image_generation=False, default_image_model_path=None,
                              enable_forum=False, enable_subagents=False, goal_mode=False,
-                             available_subagent_models=None, tool_options=None):
+                             available_subagent_models=None, tool_options=None,
+                             available_local_models=None):
         messages = self._build_messages(history, prompt)
         task_message = messages[-1]
         base_system_prompt = ""
@@ -3111,6 +3117,7 @@ class LlamaCppBackend:
                     result = self._run_subagent(
                         arguments,
                         available_models=available_subagent_models,
+                        available_local_models=available_local_models,
                         allowed_tools=enabled_tool_names,
                         model_settings=tool_options,
                         base_system_prompt=base_system_prompt,
@@ -3133,7 +3140,7 @@ class LlamaCppBackend:
                     code_workspace=code_workspace,
                     default_image_model_path=default_image_model_path,
                     enable_forum=enable_forum,
-                    available_local_models=available_subagent_models
+                    available_local_models=available_local_models
                 )
                 if isinstance(tool_result, dict):
                     result = tool_result.get("text", "")
@@ -3173,7 +3180,7 @@ class LlamaCppBackend:
         cancelled_content = "\n\n".join(forum_post_confirmations)
         finish(cancelled_content, cancelled=True, stream_started=last_stream_started)
 
-    def _run_subagent(self, arguments, available_models, allowed_tools, model_settings,
+    def _run_subagent(self, arguments, available_models, available_local_models, allowed_tools, model_settings,
                       base_system_prompt, code_workspace, default_image_model_path,
                       generation_deadline):
         arguments = arguments if isinstance(arguments, dict) else {}
@@ -3300,7 +3307,7 @@ class LlamaCppBackend:
                         code_workspace=code_workspace,
                         default_image_model_path=default_image_model_path,
                         enable_forum=allow_forum,
-                        available_local_models=available_models
+                        available_local_models=available_local_models
                     )
                     result = tool_result.get("text", "") if isinstance(tool_result, dict) else tool_result
                 result = self._fit_tool_result_to_context(result, messages, serialized_call)
@@ -3452,12 +3459,26 @@ class LlamaCppBackend:
                 models = self._validated_subagent_models(available_local_models)
                 if not models:
                     return "Aucun modèle de texte GGUF local n'est disponible dans les dossiers détectés."
+                try:
+                    offset = max(0, int(arguments.get("offset", 0)))
+                except (TypeError, ValueError):
+                    offset = 0
+                try:
+                    limit = max(1, min(100, int(arguments.get("limit", 50))))
+                except (TypeError, ValueError):
+                    limit = 50
                 entries = [
                     {"name": Path(path).stem, "path": path}
-                    for path in models
+                    for path in models[offset:offset + limit]
                 ]
                 return json.dumps(
-                    {"count": len(entries), "models": entries},
+                    {
+                        "total": len(models),
+                        "offset": offset,
+                        "limit": limit,
+                        "has_more": offset + len(entries) < len(models),
+                        "models": entries
+                    },
                     ensure_ascii=False,
                     indent=2
                 )
@@ -4213,6 +4234,7 @@ def main():
                 enable_forum = request.get("enable_forum", False)
                 enable_subagents = request.get("enable_subagents", False)
                 available_subagent_models = request.get("available_subagent_models", [])
+                available_local_models = request.get("available_local_models", available_subagent_models)
 
                 if not backend.begin_generation():
                     backend.send({"type": "error", "content": "Une generation est deja en cours."})
@@ -4231,7 +4253,7 @@ def main():
                               reasoning_effort, use_mmap, default_image_model_path,
                               generation_timeout_seconds, code_execution_timeout_seconds,
                               generated_images_directory, enable_forum, enable_subagents,
-                              available_subagent_models),
+                              available_subagent_models, available_local_models),
                         daemon=False  # Non-daemon so we can wait
                     )
                     t.start()
