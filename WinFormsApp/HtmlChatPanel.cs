@@ -4,6 +4,9 @@ using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using DoubleBufferedPanel = LocalAIApp.MainForm.DoubleBufferedPanel;
+using Message = LocalAIApp.MainForm.Message;
+using MessageType = LocalAIApp.MainForm.MessageType;
 
 namespace LocalAIApp;
 
