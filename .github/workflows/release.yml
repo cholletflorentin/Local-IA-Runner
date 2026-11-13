@@ -30,19 +30,33 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $releaseListOutput = gh release list --limit 100 --json tagName 2>&1
-          if ($LASTEXITCODE -ne 0) { Write-Output $releaseListOutput; throw "Unable to list GitHub releases." }
-          $releases = @($releaseListOutput | Out-String | ConvertFrom-Json)
-          $versionNumbers = @($releases | ForEach-Object {
-            if ($_.tagName -match '^v1\.0\.(\d+)$') { [int]$Matches[1] }
-          })
-          if ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
-          else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
-          $version = "1.0.$versionNumber"
-          & .\WinFormsApp\Installer\build-installer.ps1 -AppVersion $version
-          if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
-          & .\WinFormsApp\Installer\build-portable.ps1 -AppVersion $version
-          if ($LASTEXITCODE -ne 0) { throw "Portable package build failed." }
+          try {
+            $releaseListOutput = gh release list --limit 100 --json tagName 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "Unable to list GitHub releases.`n$($releaseListOutput | Out-String)" }
+            $releases = @($releaseListOutput | Out-String | ConvertFrom-Json)
+            $versionNumbers = @($releases | ForEach-Object {
+              if ($_.tagName -match '^v1\.0\.(\d+)$') { [int]$Matches[1] }
+            })
+            if ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
+            else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
+            $version = "1.0.$versionNumber"
+            & .\WinFormsApp\Installer\build-installer.ps1 -AppVersion $version
+            if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
+            & .\WinFormsApp\Installer\build-portable.ps1 -AppVersion $version
+            if ($LASTEXITCODE -ne 0) { throw "Portable package build failed." }
+          }
+          catch {
+            $failureDetails = @(
+              '## Détails de l’échec du build',
+              '',
+              '```text',
+              $_.Exception.Message,
+              $_.ScriptStackTrace,
+              '```'
+            ) -join "`n"
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $failureDetails -Encoding utf8
+            throw
+          }
 
       - name: Publish GitHub release and update manifest
         shell: pwsh
