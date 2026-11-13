@@ -58,6 +58,17 @@ jobs:
               '```'
             ) -join "`n"
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $failureDetails -Encoding utf8
+            try {
+              Set-Content -LiteralPath 'build-failure-diagnostic.txt' -Value $failureDetails -Encoding utf8
+              git config user.name 'github-actions[bot]'
+              git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+              git add -- build-failure-diagnostic.txt
+              git commit -m '[skip ci] Store build failure diagnostic'
+              if ($LASTEXITCODE -eq 0) { git push origin "HEAD:$env:GITHUB_REF_NAME" }
+            }
+            catch {
+              Write-Output "::warning title=Build diagnostic::Could not save diagnostic file."
+            }
             throw
           }
 
