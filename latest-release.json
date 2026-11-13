@@ -1,19 +1,19 @@
 {
-  "tag_name": "v1.0.33",
-  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.33",
-  "body": "## Nouveautés de Local IA Runner 1.0.33\r\n\r\n### Moderniser l’interface de conversation\n\n- Rendu HTML sécurisé avec Markdown, liens et blocs de code à copier ou télécharger\r\n- Réflexion grise repliable qui reste stable pendant le streaming\r\n- Zone de discussion plus lisible et conversations mieux espacées\r\n- Installation du runtime WebView2 intégrée aux paquets Windows\r\n- Corrige l’analyse PowerShell du script de l’installeur\r\n\r\n## Téléchargements\r\n\r\n- LocalIARunner-Setup-x64.exe : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.\r\n- LocalIARunner-Portable-x64-1.0.33.zip : version portable à extraire et lancer.\r\n\r\nLes modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.",
+  "tag_name": "v1.0.34",
+  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.34",
+  "body": "## Nouveautés de Local IA Runner 1.0.34\r\n\r\n- Corriger le chat blanc et agrandir les boutons\r\n\r\n## Téléchargements\r\n\r\n- LocalIARunner-Setup-x64.exe : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.\r\n- LocalIARunner-Portable-x64-1.0.34.zip : version portable à extraire et lancer.\r\n\r\nLes modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.",
   "assets": [
     {
       "name": "LocalIARunner-Setup-x64.exe",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.33/LocalIARunner-Setup-x64.exe",
-      "digest": "sha256:0c51d71df624b032018cc957c79716d5c1bae0f0c6a140fea3d14b8456580826",
-      "size": 97190289
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.34/LocalIARunner-Setup-x64.exe",
+      "digest": "sha256:cdc147fbacb13ca231fcd24166a10a478496385f448e18618a10c518c3c4cafe",
+      "size": 97187063
     },
     {
-      "name": "LocalIARunner-Portable-x64-1.0.33.zip",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.33/LocalIARunner-Portable-x64-1.0.33.zip",
-      "digest": "sha256:ca64a3bf48d856218206f27ed9c578d7cf77782c7715bbda2e9c1ccf30d1a443",
-      "size": 140446386
+      "name": "LocalIARunner-Portable-x64-1.0.34.zip",
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.34/LocalIARunner-Portable-x64-1.0.34.zip",
+      "digest": "sha256:e5990faa6a23a43d267b5a31b6d645edb1bdf3efb84fa01167133ed025ce2dad",
+      "size": 140451662
     }
   ]
 }
