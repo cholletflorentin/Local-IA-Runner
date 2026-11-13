@@ -50,7 +50,7 @@ jobs:
             $annotationText = $exceptionText.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A').Replace(':', '%3A').Replace(',', '%2C')
             Write-Output "::error title=Build failure::$annotationText"
             $failureDetails = @(
-              '## Détails de l’échec du build',
+              '## Build failure details',
               '',
               '```text',
               $_.Exception.Message,
