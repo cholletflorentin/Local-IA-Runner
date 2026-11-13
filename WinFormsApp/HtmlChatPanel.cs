@@ -314,42 +314,53 @@ public sealed class ChatPanel : DoubleBufferedPanel
             _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
             _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
             _webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
-            _webView.CoreWebView2.NavigationStarting += (_, args) =>
-            {
-                if (!string.Equals(args.Uri, "about:blank", StringComparison.OrdinalIgnoreCase))
-                    args.Cancel = true;
-            };
 
-            var htmlPath = Path.Combine(AppContext.BaseDirectory, "Assets", "chat-surface.html");
-            if (!File.Exists(htmlPath))
-                throw new FileNotFoundException("Le fichier de l’interface HTML est absent.", htmlPath);
+            using var htmlStream = typeof(ChatPanel).Assembly.GetManifestResourceStream("LocalAIApp.Assets.chat-surface.html")
+                ?? throw new InvalidOperationException("La ressource HTML de l’interface du chat est absente de l’application.");
+            using var htmlReader = new StreamReader(htmlStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            var html = await htmlReader.ReadToEndAsync();
+
             _webView.Visible = true;
             _fallbackPanel.Visible = false;
-            _webView.NavigateToString(await File.ReadAllTextAsync(htmlPath));
+            _webView.CoreWebView2.NavigateToString(html);
         }
         catch (Exception exception)
         {
             if (_closing || IsDisposed || !IsHandleCreated)
                 return;
-            BeginInvoke(new Action(() =>
+            RunOnUi(() =>
             {
+                _documentReady = false;
                 _webView.Visible = false;
                 _fallbackPanel.Visible = true;
                 _fallbackPanel.BringToFront();
                 _fallbackLabel.Text = "Impossible d’initialiser la vue HTML. Vérifie que le runtime Microsoft Edge WebView2 est installé.\n" + exception.Message;
                 _fallbackLabel.Height = 110;
-            _runtimeLink.Text = File.Exists(GetWebViewBootstrapperPath())
-                ? "Installer le runtime Microsoft Edge WebView2"
-                : "Télécharger le runtime Microsoft Edge WebView2";
-            _runtimeLink.Visible = true;
-            }));
+                _runtimeLink.Text = File.Exists(GetWebViewBootstrapperPath())
+                    ? "Installer le runtime Microsoft Edge WebView2"
+                    : "Télécharger le runtime Microsoft Edge WebView2";
+                _runtimeLink.Visible = true;
+            });
         }
     }
 
     private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs args)
     {
         if (!args.IsSuccess)
+        {
+            RunOnUi(() =>
+            {
+                _documentReady = false;
+                _webView.Visible = false;
+                _fallbackPanel.Visible = true;
+                _fallbackPanel.BringToFront();
+                _fallbackLabel.Text = $"Impossible d’afficher le chat HTML (erreur WebView2 : {args.WebErrorStatus}).";
+                _fallbackLabel.Height = 110;
+                _runtimeLink.Visible = false;
+            });
             return;
+        }
+
         _documentReady = true;
         RunScript($"window.localIA?.setHeader({ToJson(_title)}, {ToJson(_modelName)});");
         RenderAll(forceBottom: true);

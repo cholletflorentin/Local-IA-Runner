@@ -2571,9 +2571,9 @@ namespace LocalAIApp
         [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public Color BackColorPressed { get; set; } = ThemeColors.PrimaryPressed;
         [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-        public Color TextColor { get; set; } = Color.White;
+        public Color TextColor { get; set; } = Color.Empty;
         [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-        public int CornerRadius { get; set; } = 8;
+        public int CornerRadius { get; set; } = 10;
         private bool _hovered, _pressed;
 
         public ModernButton()
@@ -2592,7 +2592,7 @@ namespace LocalAIApp
             FlatAppearance.MouseDownBackColor = Color.Transparent;
             FlatAppearance.CheckedBackColor = Color.Transparent;
             Font = new Font("Segoe UI", 9f, FontStyle.Bold);
-            ForeColor = TextColor;
+            ForeColor = ThemeColors.TextPrimary;
             BackColor = Color.Transparent;
             Cursor = Cursors.Hand;
             Height = 36;
@@ -2717,16 +2717,25 @@ namespace LocalAIApp
             }
 
             var color = !Enabled
-                ? ControlPaint.Dark(BackColorNormal, 0.2f)
+                ? ThemeColors.BorderLight
                 : _pressed ? BackColorPressed : _hovered ? BackColorHover : BackColorNormal;
             using (var path = GetRoundedRectPath(rect, CornerRadius))
             using (var brush = new SolidBrush(color))
             {
                 g.FillPath(brush, path);
+                if (Enabled && GetReadableTextColor(color) == ThemeColors.TextPrimary)
+                {
+                    using var borderPen = new Pen(ThemeColors.Border, 1f);
+                    g.DrawPath(borderPen, path);
+                }
             }
 
             var textRect = Rectangle.Inflate(rect, -Math.Min(4, rect.Width / 2), -Math.Min(1, rect.Height / 2));
-            var textColor = Enabled ? TextColor : ThemeColors.TextMuted;
+            var textColor = !Enabled
+                ? ThemeColors.TextMuted
+                : !TextColor.IsEmpty
+                    ? TextColor
+                    : GetReadableTextColor(color);
             if (textRect.Width > 0 && textRect.Height > 0)
             {
                 TextRenderer.DrawText(g, Text ?? "", Font, textRect, textColor,
@@ -2736,9 +2745,13 @@ namespace LocalAIApp
 
             if (Focused && ShowFocusCues)
             {
-                var focusRect = Rectangle.Inflate(rect, -4, -4);
+                var focusRect = Rectangle.Inflate(rect, -2, -2);
                 if (focusRect.Width > 0 && focusRect.Height > 0)
-                    ControlPaint.DrawFocusRectangle(g, focusRect, textColor, color);
+                {
+                    using var focusPath = GetRoundedRectPath(focusRect, Math.Max(2, CornerRadius - 2));
+                    using var focusPen = new Pen(ThemeColors.Primary, 1.5f);
+                    g.DrawPath(focusPen, focusPath);
+                }
             }
 
             g.Restore(graphicsState);
@@ -2763,6 +2776,12 @@ namespace LocalAIApp
             path.AddArc(rect.X, rect.Bottom - d, d, d, 90, 90);
             path.CloseFigure();
             return path;
+        }
+
+        private static Color GetReadableTextColor(Color background)
+        {
+            var luminance = (0.2126f * background.R + 0.7152f * background.G + 0.0722f * background.B) / 255f;
+            return luminance >= 0.62f ? ThemeColors.TextPrimary : Color.White;
         }
     }
 
@@ -2847,7 +2866,7 @@ namespace LocalAIApp
 
         public InputPanel()
         {
-            Height = 154;
+            Height = 160;
             BackColor = ThemeColors.Surface;
             Padding = new Padding(16, 9, 16, 9);
 
@@ -2861,7 +2880,7 @@ namespace LocalAIApp
             };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46F));
 
             _inputBox = new ModernTextBox
             {
@@ -2892,8 +2911,8 @@ namespace LocalAIApp
                 Padding = new Padding(0, 4, 0, 0)
             };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 78F));
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96F));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 84F));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 136F));
 
             _modelLabel = new Label
             {
@@ -2919,14 +2938,16 @@ namespace LocalAIApp
 
             _sendBtn = new ModernButton
             {
-                Text = "Envoyer ↑",
+                Text = "Envoyer  ↑",
                 Dock = DockStyle.Fill,
                 BackColorNormal = ThemeColors.Primary,
                 BackColorHover = ThemeColors.PrimaryHover,
                 BackColorPressed = ThemeColors.PrimaryPressed,
                 Enabled = false,
-                Margin = new Padding(5, 2, 0, 2),
-                Height = 34
+                Margin = new Padding(5, 0, 0, 2),
+                Font = new Font("Segoe UI", 10f, FontStyle.Bold),
+                CornerRadius = 10,
+                Height = 40
             };
             footer.Controls.Add(_sendBtn, 2, 0);
             layout.Controls.Add(footer, 0, 1);
@@ -2984,7 +3005,7 @@ namespace LocalAIApp
         {
             _sendBtn.Enabled = _ready && _modelSelected && !_isCancelling;
             _inputBox.Enabled = _ready && !_isGenerating;
-            _sendBtn.Text = _isCancelling ? "Arrêt…" : _isGenerating ? "Annuler" : "Envoyer";
+            _sendBtn.Text = _isCancelling ? "Arrêt…" : _isGenerating ? "Annuler" : "Envoyer  ↑";
         }
 
         private void UpdateCharCount()
@@ -3084,7 +3105,7 @@ namespace LocalAIApp
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None
             };
             folderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            folderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 78F));
+            folderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90F));
             folderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 42F));
 
             _folderTextBox = new TextBox
@@ -3215,7 +3236,7 @@ namespace LocalAIApp
                 Font = new Font("Segoe UI", 9f),
                 BorderStyle = BorderStyle.None,
                 SelectionMode = SelectionMode.One,
-                ItemHeight = 72,
+                ItemHeight = 82,
                 Margin = new Padding(4, 0, 4, 0)
             };
             _conversationsListBox.DrawItem += DrawConversationItem;
@@ -3459,17 +3480,20 @@ namespace LocalAIApp
             
             TextRenderer.DrawText(g, model.TypeIcon + "  " + model.Name, titleFont,
                 new Rectangle(rect.X + 12, rect.Y + 4, rect.Width - 24, 22),
-                selected ? Color.White : ThemeColors.TextPrimary, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                selected ? Color.White : ThemeColors.TextPrimary,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
             TextRenderer.DrawText(g, typeText, metaFont,
                 new Rectangle(rect.X + 12, rect.Y + 26, rect.Width - 24, 18),
-                selected ? Color.White : ThemeColors.TextSecondary, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                selected ? Color.White : ThemeColors.TextSecondary,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
 
             var pathText = model.Folder ?? model.Path;
             if (pathText.Length > 60) pathText = "..." + pathText.Substring(pathText.Length - 57);
             
             TextRenderer.DrawText(g, pathText, pathFont,
                 new Rectangle(rect.X + 12, rect.Y + 44, rect.Width - 24, 18),
-                selected ? Color.White : ThemeColors.TextMuted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                selected ? Color.White : ThemeColors.TextMuted,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
 
             // Draw focus rectangle
             if ((e.State & DrawItemState.Focus) == DrawItemState.Focus && (e.State & DrawItemState.NoFocusRect) != DrawItemState.NoFocusRect)
@@ -3530,24 +3554,35 @@ namespace LocalAIApp
             using var titleFont = new Font("Segoe UI", 10.5f, FontStyle.Bold);
             using var previewFont = new Font("Segoe UI", 9.5f);
             using var timeFont = new Font("Segoe UI", 9.5f);
+            var contentX = rect.X + 12;
+            var contentWidth = rect.Width - 24;
+            var titleY = rect.Y + 5;
+            const int titleHeight = 22;
+            const int lineGap = 3;
+            const int timeHeight = 16;
+            var timeY = rect.Bottom - timeHeight - 4;
+            var previewY = titleY + titleHeight + lineGap;
+            var previewHeight = Math.Max(16, timeY - previewY - lineGap);
+            var singleLine = TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
+                             TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis;
             TextRenderer.DrawText(g, name, titleFont,
-                new Rectangle(rect.X + 12, rect.Y + 5, rect.Width - 24, 24),
-                Color.White, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                new Rectangle(contentX, titleY, contentWidth, titleHeight),
+                selected ? Color.White : ThemeColors.TextPrimary, singleLine);
 
             if (!string.IsNullOrEmpty(preview))
             {
                 TextRenderer.DrawText(g, preview, previewFont,
-                    new Rectangle(rect.X + 12, rect.Y + 33, rect.Width - 24, 21),
+                    new Rectangle(contentX, previewY, contentWidth, previewHeight),
                     selected ? Color.White : ThemeColors.TextSecondary,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                    singleLine);
             }
 
             if (!string.IsNullOrEmpty(timeStr))
             {
                 TextRenderer.DrawText(g, timeStr, timeFont,
-                    new Rectangle(rect.X + 12, rect.Y + 58, rect.Width - 24, 16),
+                    new Rectangle(contentX, timeY, contentWidth, timeHeight),
                     selected ? Color.White : ThemeColors.TextSecondary,
-                    TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+                    TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
             }
 
             // Draw focus rectangle

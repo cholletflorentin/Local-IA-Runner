@@ -24,6 +24,9 @@
     <None Update="Assets\chat-surface.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <EmbeddedResource Include="Assets\chat-surface.html">
+      <LogicalName>LocalAIApp.Assets.chat-surface.html</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <Target Name="RemoveCopiedPythonBytecode" AfterTargets="Build">
