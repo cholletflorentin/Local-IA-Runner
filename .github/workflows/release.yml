@@ -57,14 +57,23 @@ jobs:
               $_.ScriptStackTrace,
               '```'
             ) -join "`n"
-            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $failureDetails -Encoding utf8
+            try {
+              if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+                Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $failureDetails -Encoding utf8
+              }
+            }
+            catch {
+              Write-Output '::warning title=Build diagnostic::Could not add details to the job summary.'
+            }
             try {
               Set-Content -LiteralPath 'build-failure-diagnostic.txt' -Value $failureDetails -Encoding utf8
               git config user.name 'github-actions[bot]'
               git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-              git add -- build-failure-diagnostic.txt
+              git add --force -- build-failure-diagnostic.txt
               git commit -m '[skip ci] Store build failure diagnostic'
-              if ($LASTEXITCODE -eq 0) { git push origin "HEAD:$env:GITHUB_REF_NAME" }
+              if ($LASTEXITCODE -ne 0) { throw 'Could not commit diagnostic file.' }
+              git push origin "HEAD:$env:GITHUB_REF_NAME"
+              if ($LASTEXITCODE -ne 0) { throw 'Could not push diagnostic file.' }
             }
             catch {
               Write-Output "::warning title=Build diagnostic::Could not save diagnostic file."
