@@ -63,7 +63,17 @@ namespace LocalAIApp
             $ErrorActionPreference = 'Stop'
             $stagingDirectory = $null
             $backupDirectory = $null
+            $updateLogPath = Join-Path (Split-Path -Parent $PackagePath) 'update.log'
+            $updateSucceeded = $false
             $changedFiles = [System.Collections.Generic.List[object]]::new()
+
+            function Write-UpdateLog([string]$Message) {
+                try {
+                    Add-Content -LiteralPath $updateLogPath `
+                        -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff')] $Message" `
+                        -Encoding UTF8
+                } catch { }
+            }
 
             function Show-UpdateFailure([string]$Message) {
                 try {
@@ -78,20 +88,35 @@ namespace LocalAIApp
             }
 
             try {
-                try { Wait-Process -Id $WaitPid -ErrorAction SilentlyContinue } catch { }
-                while (Get-Process -Name 'Local IA Runner' -ErrorAction SilentlyContinue) {
-                    Start-Sleep -Seconds 2
+                Write-UpdateLog "Helper started; waiting for application process $WaitPid to exit."
+                $waitDeadline = (Get-Date).AddMinutes(3)
+                $processStillRunning = $true
+                while ($processStillRunning -and (Get-Date) -lt $waitDeadline) {
+                    $processStillRunning = $null -ne (Get-Process -Id $WaitPid -ErrorAction SilentlyContinue)
+                    if ($processStillRunning) {
+                        Start-Sleep -Seconds 1
+                    }
                 }
+                if ($processStillRunning) {
+                    throw "L'application (PID $WaitPid) ne s'est pas fermée après trois minutes."
+                }
+                Write-UpdateLog 'Application process exited.'
 
                 if ($Mode -eq 'installer') {
+                    if (-not (Test-Path -LiteralPath $PackagePath -PathType Leaf)) {
+                        throw "L'installateur téléchargé est introuvable : $PackagePath"
+                    }
                     $directoryArgument = '/DIR="' + $InstallDirectory + '"'
+                    Write-UpdateLog "Starting visible installer: $PackagePath"
                     $setup = Start-Process -FilePath $PackagePath `
-                        -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', $directoryArgument) `
+                        -ArgumentList @('/SILENT', '/NORESTART', $directoryArgument) `
                         -Wait -PassThru
+                    Write-UpdateLog "Installer exited with code $($setup.ExitCode)."
                     if ($setup.ExitCode -ne 0) {
                         throw "L'installateur a échoué (code $($setup.ExitCode))."
                     }
                 } else {
+                    Write-UpdateLog "Applying portable package: $PackagePath"
                     $stagingDirectory = Join-Path $env:TEMP ('LocalIARunner-update-' + [guid]::NewGuid().ToString('N'))
                     New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
                     Expand-Archive -LiteralPath $PackagePath -DestinationPath $stagingDirectory -Force
@@ -146,11 +171,15 @@ namespace LocalAIApp
 
                 $appPath = Join-Path $InstallDirectory 'Local IA Runner.exe'
                 if (-not (Test-Path -LiteralPath $appPath -PathType Leaf)) {
-                    throw 'L’application mise à jour est introuvable après l’installation.'
+                    throw "The updated application could not be found after installation."
                 }
                 Start-Process -FilePath $appPath -WorkingDirectory $InstallDirectory
+                $updateSucceeded = $true
+                Write-UpdateLog 'Updated application started successfully.'
 
             } catch {
+                $failureDetails = ($_ | Out-String).Trim()
+                Write-UpdateLog "Update failed: $failureDetails"
                 if ($Mode -eq 'portable') {
                     for ($index = $changedFiles.Count - 1; $index -ge 0; $index--) {
                         $changed = $changedFiles[$index]
@@ -163,12 +192,16 @@ namespace LocalAIApp
                         } catch { }
                     }
                 }
-                Show-UpdateFailure ("La mise à jour n'a pas pu être appliquée.`n`n" + $_.Exception.Message)
+                $failureMessage = "La mise à jour n'a pas pu être appliquée.`n`n$($_.Exception.Message)`n`nJournal : $updateLogPath"
+                if (Test-Path -LiteralPath $PackagePath -PathType Leaf) {
+                    $failureMessage += "`nInstallateur conservé : $PackagePath"
+                }
+                Show-UpdateFailure $failureMessage
             } finally {
                 if ($stagingDirectory -and (Test-Path -LiteralPath $stagingDirectory)) {
                     Remove-Item -LiteralPath $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
                 }
-                if (Test-Path -LiteralPath $PackagePath) {
+                if ($updateSucceeded -and (Test-Path -LiteralPath $PackagePath)) {
                     $packageDeleted = $false
                     for ($attempt = 0; $attempt -lt 10; $attempt++) {
                         try {
@@ -181,16 +214,10 @@ namespace LocalAIApp
                         Start-Sleep -Milliseconds 500
                     }
                     if (-not $packageDeleted -and (Test-Path -LiteralPath $PackagePath)) {
-                        try {
-                            Add-Type -AssemblyName System.Windows.Forms
-                            [System.Windows.Forms.MessageBox]::Show(
-                                "La mise à jour est terminée, mais le fichier téléchargé n'a pas pu être supprimé :`n$PackagePath",
-                                'Local IA Runner',
-                                [System.Windows.Forms.MessageBoxButtons]::OK,
-                                [System.Windows.Forms.MessageBoxIcon]::Warning
-                            ) | Out-Null
-                        } catch { }
+                        Write-UpdateLog "Update succeeded, but the downloaded package could not be removed: $PackagePath"
                     }
+                } elseif (Test-Path -LiteralPath $PackagePath -PathType Leaf) {
+                    Write-UpdateLog "Update package retained for retry: $PackagePath"
                 }
                 if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath)) {
                     Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
