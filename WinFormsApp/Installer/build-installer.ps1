@@ -140,7 +140,7 @@ $webViewSignature = Get-AuthenticodeSignature -FilePath $webViewBootstrapperCach
 if ($webViewSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
     $webViewSignature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
     Remove-Item -LiteralPath $webViewBootstrapperCache -Force -ErrorAction SilentlyContinue
-    throw 'Le bootstrapper WebView2 n’a pas une signature Microsoft valide.'
+    throw "Le bootstrapper WebView2 n'a pas une signature Microsoft valide."
 }
 $webViewDependencies = Join-Path $stageDir 'Dependencies'
 New-Item -ItemType Directory -Force -Path $webViewDependencies | Out-Null
