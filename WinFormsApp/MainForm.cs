@@ -27,6 +27,7 @@ namespace LocalAIApp
         private bool _isStartingBackend = false;
         private bool _updateCheckInProgress = false;
         private bool _updateHelperLaunched = false;
+        private string? _pendingUpdatePackagePath;
         private string _selectedModelPath = "";
         private string _modelsFolder = "";
         private bool _isGenerating = false;
@@ -772,6 +773,12 @@ namespace LocalAIApp
                             _isPythonReady = false;
                             ClearPendingConversationTitleRequests();
                             _inputPanel.SetReady(false);
+                            if (_imageGenerationActive)
+                            {
+                                _imageGenerationActive = false;
+                                _imageGeneratorForm?.SetCompleted(new List<string>(), "Le backend Python s'est arrêté.", false);
+                            }
+                            ApplyPendingUpdateWhenIdle();
                         }));
                     };
 
@@ -891,6 +898,7 @@ namespace LocalAIApp
                             _currentConversation.Add(new Message { Role = "assistant", Content = responseContent, Timestamp = DateTime.Now });
                             SaveConversation();
                             _statusBar.SetStatus("Pret", StatusType.Success);
+                            ApplyPendingUpdateWhenIdle();
                             break;
                         case "generation_start":
                             MarkGenerationProgress();
@@ -996,6 +1004,7 @@ namespace LocalAIApp
                                 _inputPanel.SetGenerating(false);
                                 _statusBar.SetStatus("Erreur stream_end", StatusType.Error);
                             }
+                            ApplyPendingUpdateWhenIdle();
                             break;
                         case "conversation_title_start":
                             MarkGenerationProgress();
@@ -1020,6 +1029,7 @@ namespace LocalAIApp
                                 _inputPanel.SetGenerating(false);
                             }
                             _statusBar.SetStatus("Erreur: " + msg.Content, StatusType.Error);
+                            ApplyPendingUpdateWhenIdle();
                             break;
                         case "model_loading":
                             _statusBar.SetStatus("Chargement: " + msg.Content, StatusType.Info);
@@ -1059,11 +1069,13 @@ namespace LocalAIApp
                             _imageGenerationActive = false;
                             _imageGeneratorForm?.SetCompleted(msg.Paths?.ToObject<List<string>>() ?? new List<string>(), msg.Error, msg.Cancelled);
                             _statusBar.SetStatus(msg.Error != null ? "Erreur génération image" : msg.Cancelled ? "Génération image annulée" : "Image générée", msg.Error != null ? StatusType.Error : msg.Cancelled ? StatusType.Warning : StatusType.Success);
+                            ApplyPendingUpdateWhenIdle();
                             break;
                         case "image_error":
                             _imageGenerationActive = false;
                             _imageGeneratorForm?.SetCompleted(new List<string>(), msg.Content ?? "Erreur inconnue", false);
                             _statusBar.SetStatus("Erreur génération image", StatusType.Error);
+                            ApplyPendingUpdateWhenIdle();
                             break;
                         case "debug":
                             Log("Backend: " + msg.Content);
@@ -1510,7 +1522,7 @@ namespace LocalAIApp
 
         private async Task CheckForUpdatesAsync(bool userInitiated)
         {
-            if (_updateCheckInProgress || _updateHelperLaunched)
+            if (_updateCheckInProgress || _updateHelperLaunched || !string.IsNullOrWhiteSpace(_pendingUpdatePackagePath))
                 return;
 
             _updateCheckInProgress = true;
@@ -1537,18 +1549,13 @@ namespace LocalAIApp
                         _statusBar.SetStatus($"Téléchargement de la mise à jour : {percent:0}%", StatusType.Info);
                 });
                 var packagePath = await GitHubUpdater.DownloadAssetAsync(asset, progress);
-                GitHubUpdater.StartApplyHelper(packagePath);
-                _updateHelperLaunched = true;
-                _statusBar.SetStatus(
-                    $"Mise à jour {release.Version} téléchargée. Elle sera appliquée à la fermeture de l'application.",
+                _pendingUpdatePackagePath = packagePath;
+                var waitingForGeneration = _isGenerating || _isStreamingResponse || _imageGenerationActive;
+                _statusBar.SetStatus(waitingForGeneration
+                        ? $"Mise à jour {release.Version} téléchargée. Installation après la fin de la génération en cours..."
+                        : $"Mise à jour {release.Version} téléchargée. Préparation de l'installation...",
                     StatusType.Success);
-
-                if (userInitiated)
-                {
-                    MessageBox.Show(this,
-                        $"La mise à jour {release.Version} est téléchargée. Elle sera installée automatiquement quand tu fermeras l'application.",
-                        "Mise à jour prête", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
+                ApplyPendingUpdateWhenIdle();
             }
             catch (Exception ex)
             {
@@ -1567,6 +1574,37 @@ namespace LocalAIApp
             finally
             {
                 _updateCheckInProgress = false;
+            }
+        }
+
+        private void ApplyPendingUpdateWhenIdle()
+        {
+            if (IsDisposed || Disposing || _updateHelperLaunched ||
+                string.IsNullOrWhiteSpace(_pendingUpdatePackagePath) ||
+                _isGenerating || _isStreamingResponse || _imageGenerationActive)
+                return;
+
+            var packagePath = _pendingUpdatePackagePath!;
+            try
+            {
+                GitHubUpdater.StartApplyHelper(packagePath);
+                _updateHelperLaunched = true;
+                _pendingUpdatePackagePath = null;
+                _isPythonReady = false;
+                _inputPanel.SetReady(false);
+                _imageGeneratorForm?.Close();
+                _statusBar.SetStatus("Génération terminée. Fermeture pour installer la mise à jour...", StatusType.Info);
+                BeginInvoke(new Action(Close));
+            }
+            catch (Exception ex)
+            {
+                GitHubUpdater.DeleteDownloadedAsset(packagePath);
+                _pendingUpdatePackagePath = null;
+                _statusBar.SetStatus("Impossible de démarrer l'installateur", StatusType.Error);
+                LogException("Démarrage de l'installateur téléchargé", ex);
+                MessageBox.Show(this,
+                    "L'installateur n'a pas pu démarrer. Le téléchargement a été supprimé; tu peux relancer la vérification des mises à jour.\n\n" + ex.Message,
+                    "Mise à jour impossible", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -1637,6 +1675,7 @@ namespace LocalAIApp
                         {
                             _imageGenerationActive = false;
                             _imageGeneratorForm?.SetCompleted(new List<string>(), ex.Message, false);
+                            ApplyPendingUpdateWhenIdle();
                         }));
                     }
                 }
@@ -1995,6 +2034,24 @@ namespace LocalAIApp
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            if (!_updateHelperLaunched &&
+                !string.IsNullOrWhiteSpace(_pendingUpdatePackagePath) &&
+                e.CloseReason == CloseReason.UserClosing &&
+                (_isGenerating || _isStreamingResponse || _imageGenerationActive))
+            {
+                e.Cancel = true;
+                _statusBar.SetStatus(
+                    "La mise à jour attend la fin de la génération. Utilise Annuler si tu veux l'interrompre.",
+                    StatusType.Warning);
+                return;
+            }
+
+            if (!_updateHelperLaunched && !string.IsNullOrWhiteSpace(_pendingUpdatePackagePath))
+            {
+                GitHubUpdater.DeleteDownloadedAsset(_pendingUpdatePackagePath);
+                _pendingUpdatePackagePath = null;
+            }
+
             SaveConversation();
             _generationWatchdog?.Dispose();
             _streamRenderTimer.Stop();
@@ -5298,7 +5355,7 @@ namespace LocalAIApp
             };
             content.Controls.Add(CreateSettingCard(
                 "Mise à jour automatique depuis GitHub",
-                "Au démarrage, télécharge la dernière release et vérifie son SHA-256. L'installation s'applique à la fermeture; modèles et données restent en place.",
+                "Télécharge la dernière release et vérifie son SHA-256. Si une génération est en cours, l'application attend sa fin, s'installe puis redémarre. Le fichier téléchargé est supprimé après l'installation.",
                 _autoUpdateCheckBox));
 
             AddSection(content, "INSTRUCTIONS ET MÉMOIRE");

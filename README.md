@@ -87,7 +87,7 @@ Quand ces outils sont autorisés, le modèle peut utiliser `list_images` pour pa
 
 Dans **Outils / Paramètres / Délais des outils**, tu peux régler le délai d'inactivité d'une génération (30 secondes à 2 heures, 900 secondes par défaut) ainsi que le temps maximal accordé à un script Python (1 seconde à 2 heures, 30 secondes par défaut). L'activité du modèle et la progression des outils réinitialisent le délai d'inactivité.
 
-Les mises à jour sont activées par défaut dans **Outils / Paramètres / Mises à jour**. Au démarrage, l'application lit le manifeste joint à la dernière release, télécharge l'installateur Windows et valide son empreinte SHA-256. Si cet asset est momentanément indisponible, elle essaie la copie du dépôt puis l'API GitHub. À la fermeture, l'installateur est exécuté en mode silencieux dans le dossier actuel de l'application. Le menu **Outils / Vérifier les mises à jour** permet de lancer la vérification manuellement.
+Les mises à jour sont activées par défaut dans **Outils / Paramètres / Mises à jour**. Au démarrage, l'application lit le manifeste joint à la dernière release, télécharge l'installateur Windows et valide son empreinte SHA-256. Si cet asset est momentanément indisponible, elle essaie la copie du dépôt puis l'API GitHub. Si une génération de texte ou d'image est en cours, l'application attend sa fin, puis se ferme et lance l'installation silencieuse dans son dossier actuel. Elle redémarre ensuite automatiquement et supprime le fichier téléchargé. Le menu **Outils / Vérifier les mises à jour** permet de lancer la vérification manuellement.
 
 ## Structure
 

@@ -144,6 +144,12 @@ namespace LocalAIApp
                     }
                 }
 
+                $appPath = Join-Path $InstallDirectory 'Local IA Runner.exe'
+                if (-not (Test-Path -LiteralPath $appPath -PathType Leaf)) {
+                    throw 'L’application mise à jour est introuvable après l’installation.'
+                }
+                Start-Process -FilePath $appPath -WorkingDirectory $InstallDirectory
+
             } catch {
                 if ($Mode -eq 'portable') {
                     for ($index = $changedFiles.Count - 1; $index -ge 0; $index--) {
@@ -163,7 +169,31 @@ namespace LocalAIApp
                     Remove-Item -LiteralPath $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
                 }
                 if (Test-Path -LiteralPath $PackagePath) {
-                    Remove-Item -LiteralPath $PackagePath -Force -ErrorAction SilentlyContinue
+                    $packageDeleted = $false
+                    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+                        try {
+                            Remove-Item -LiteralPath $PackagePath -Force -ErrorAction Stop
+                            if (-not (Test-Path -LiteralPath $PackagePath)) {
+                                $packageDeleted = $true
+                                break
+                            }
+                        } catch { }
+                        Start-Sleep -Milliseconds 500
+                    }
+                    if (-not $packageDeleted -and (Test-Path -LiteralPath $PackagePath)) {
+                        try {
+                            Add-Type -AssemblyName System.Windows.Forms
+                            [System.Windows.Forms.MessageBox]::Show(
+                                "La mise à jour est terminée, mais le fichier téléchargé n'a pas pu être supprimé :`n$PackagePath",
+                                'Local IA Runner',
+                                [System.Windows.Forms.MessageBoxButtons]::OK,
+                                [System.Windows.Forms.MessageBoxIcon]::Warning
+                            ) | Out-Null
+                        } catch { }
+                    }
+                }
+                if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath)) {
+                    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
                 }
             }
             """;
@@ -355,6 +385,35 @@ namespace LocalAIApp
             }
         }
 
+        public static void DeleteDownloadedAsset(string? packagePath)
+        {
+            if (string.IsNullOrWhiteSpace(packagePath))
+                return;
+
+            try
+            {
+                var updateDirectory = Path.GetFullPath(Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "LocalIARunner",
+                    "Updates"));
+                var updateRoot = updateDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    + Path.DirectorySeparatorChar;
+                var fullPath = Path.GetFullPath(packagePath);
+                var fileName = Path.GetFileName(fullPath);
+                if (!fullPath.StartsWith(updateRoot, StringComparison.OrdinalIgnoreCase) ||
+                    !(fileName.StartsWith("LocalIARunner-Setup-x64-", StringComparison.OrdinalIgnoreCase) ||
+                      fileName.StartsWith("LocalIARunner-Portable-x64-", StringComparison.OrdinalIgnoreCase)))
+                    return;
+
+                if (File.Exists(fullPath))
+                    File.Delete(fullPath);
+            }
+            catch
+            {
+                // A failed or interrupted download is removed on the next cleanup attempt.
+            }
+        }
+
         public static Process StartApplyHelper(string packagePath)
         {
             var appDirectory = NormalizeDirectory(AppContext.BaseDirectory);
@@ -395,8 +454,16 @@ namespace LocalAIApp
             startInfo.ArgumentList.Add("-Mode");
             startInfo.ArgumentList.Add(isInstaller ? "installer" : "portable");
 
-            return Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Le programme de mise à jour n'a pas pu démarrer.");
+            try
+            {
+                return Process.Start(startInfo)
+                    ?? throw new InvalidOperationException("Le programme de mise à jour n'a pas pu démarrer.");
+            }
+            catch
+            {
+                try { if (File.Exists(scriptPath)) File.Delete(scriptPath); } catch { }
+                throw;
+            }
         }
 
         private static string NormalizeDirectory(string path) => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
