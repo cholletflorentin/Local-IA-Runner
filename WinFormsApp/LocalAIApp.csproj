@@ -13,12 +13,16 @@
 
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="..\PythonBackend\ai_backend.py">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>PythonBackend\ai_backend.py</Link>
+    </None>
+    <None Update="Assets\chat-surface.html">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
 

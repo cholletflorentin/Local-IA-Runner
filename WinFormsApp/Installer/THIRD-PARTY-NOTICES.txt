@@ -21,3 +21,8 @@ Microsoft Visual C++ v14 runtime
 
 Newtonsoft.Json 13.0.3
   MIT License. See Licenses\Newtonsoft.Json-LICENSE.md.
+
+Microsoft.Web.WebView2 SDK 1.0.4314.35
+  BSD 3-Clause license. See Licenses\Microsoft.Web.WebView2-LICENSE.txt.
+  The Evergreen WebView2 Runtime is installed by the setup when missing; portable users
+  can launch the bundled Microsoft bootstrapper from the app's runtime warning screen.

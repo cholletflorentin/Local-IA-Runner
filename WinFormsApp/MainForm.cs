@@ -114,9 +114,9 @@ namespace LocalAIApp
         {
             this.Text = "Local IA Runner";
             this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
-            this.Size = new Size(1200, 800);
+            this.Size = new Size(1440, 900);
             this.StartPosition = FormStartPosition.CenterScreen;
-            this.MinimumSize = new Size(900, 600);
+            this.MinimumSize = new Size(1040, 680);
             this.BackColor = ThemeColors.Background;
             this.ForeColor = ThemeColors.TextPrimary;
             this.Font = new Font("Segoe UI", 9.5f);
@@ -130,10 +130,10 @@ namespace LocalAIApp
             this.UpdateStyles();
 
             // Main container with padding
-            var mainContainer = new Panel { Dock = DockStyle.Fill, BackColor = ThemeColors.Background, Padding = new Padding(8) };
+            var mainContainer = new Panel { Dock = DockStyle.Fill, BackColor = ThemeColors.Background, Padding = new Padding(12, 8, 12, 10) };
             
             // Sidebar - Fixed width, Dock Left
-            _sidebarPanel = new SidebarPanel { Dock = DockStyle.Left, Width = 340, Margin = new Padding(0, 0, 8, 0) };
+            _sidebarPanel = new SidebarPanel { Dock = DockStyle.Left, Width = 320, Margin = new Padding(0, 0, 10, 0) };
             _sidebarPanel.ModelsFolderChanged += OnModelsFolderChanged;
             _sidebarPanel.ModelSelected += OnModelSelected;
             _sidebarPanel.ConversationSelected += OnConversationSelected;
@@ -153,7 +153,7 @@ namespace LocalAIApp
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None
             };
             chatLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            chatLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 180F)); // header(32) + input(80) + padding(16*2) + border
+            chatLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 154F));
 
             _chatPanel = new ChatPanel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8) };
             chatLayout.Controls.Add(_chatPanel, 0, 0);
@@ -838,6 +838,7 @@ namespace LocalAIApp
             _selectedModelPath = modelPath;
             var modelName = GetModelDisplayName(modelPath);
             _selectedModelName = modelName;
+            _chatPanel.SetModelName(modelName);
             
             _statusBar.SetStatus("Modele selectionne: " + modelName, StatusType.Info);
             _inputPanel.SetModelSelected(true, modelName);
@@ -1970,6 +1971,7 @@ namespace LocalAIApp
         {
             _currentConversationId = Guid.NewGuid().ToString("N");
             _currentConversationTitle = "";
+            _chatPanel.SetConversationTitle("Nouvelle conversation");
             _currentConversationTitleGenerated = false;
             _conversationTitleRequestPending = false;
             _streamingConversationTitle.Clear();
@@ -2013,6 +2015,8 @@ namespace LocalAIApp
             _streamingConversationTitle.Clear();
             _streamingConversationTitleId = message.ConversationId;
             _sidebarPanel.SetConversationTitlePreview(Path.GetFileName(file), "…");
+            if (string.Equals(_currentConversationId, message.ConversationId, StringComparison.Ordinal))
+                _chatPanel.SetConversationTitle("Nommage en cours…");
         }
 
         private void AppendStreamingConversationTitle(PythonMessage message)
@@ -2026,7 +2030,11 @@ namespace LocalAIApp
             _streamingConversationTitle.Append(message.Content ?? "");
             var preview = NormalizeConversationTitle(_streamingConversationTitle.ToString());
             if (!string.IsNullOrWhiteSpace(preview))
+            {
                 _sidebarPanel.SetConversationTitlePreview(Path.GetFileName(file), preview);
+                if (string.Equals(_currentConversationId, message.ConversationId, StringComparison.Ordinal))
+                    _chatPanel.SetConversationTitle(preview);
+            }
         }
 
         private static string LimitTitleContext(string content)
@@ -2052,6 +2060,10 @@ namespace LocalAIApp
 
             _pendingConversationTitleFiles.Remove(message.ConversationId);
             _sidebarPanel.SetConversationTitlePreview(Path.GetFileName(oldPath), "");
+            if (string.Equals(_currentConversationId, message.ConversationId, StringComparison.Ordinal))
+                _chatPanel.SetConversationTitle(string.IsNullOrWhiteSpace(_currentConversationTitle)
+                    ? "Nouvelle conversation"
+                    : _currentConversationTitle);
             if (string.Equals(_streamingConversationTitleId, message.ConversationId, StringComparison.Ordinal))
             {
                 _streamingConversationTitle.Clear();
@@ -2089,6 +2101,7 @@ namespace LocalAIApp
                 {
                     _currentConversationFile = newPath;
                     _currentConversationTitle = title;
+                    _chatPanel.SetConversationTitle(title);
                     _currentConversationTitleGenerated = true;
                 }
 
@@ -2211,15 +2224,19 @@ namespace LocalAIApp
                     if (!string.IsNullOrEmpty(data.ModelPath))
                     {
                         _selectedModelPath = data.ModelPath;
-                        _inputPanel.SetModelSelected(true, GetModelDisplayName(data.ModelPath));
+                        var modelName = GetModelDisplayName(data.ModelPath);
+                        _selectedModelName = modelName;
+                        _inputPanel.SetModelSelected(true, modelName);
+                        _chatPanel.SetModelName(modelName);
+                    }
+                    else
+                    {
+                        _chatPanel.SetModelName(_selectedModelName);
                     }
                     _currentConversationFile = file;
+                    _chatPanel.SetConversationTitle(_currentConversationTitle);
 
-                    _chatPanel.Clear();
-                    foreach (var msg in _currentConversation)
-                    {
-                        _chatPanel.AddMessage(msg.Role == "user" ? "Vous :" : "Assistant :", msg.Content, msg.Role == "user");
-                    }
+                    _chatPanel.RenderMessages(_currentConversation);
                     _sidebarPanel.SelectConversation(Path.GetFileName(file));
                 }
             }
@@ -2451,29 +2468,29 @@ namespace LocalAIApp
         public long? Downloaded { get; set; }
     }
 
-    // ===== THEME - EXACT MATCH FROM HTML =====
+    // ===== THEME =====
     public static class ThemeColors
     {
-        public static readonly Color Background = Color.FromArgb(0x12, 0x12, 0x14);      // #121214
-        public static readonly Color Surface = Color.FromArgb(0x1C, 0x1C, 0x1E);        // #1C1C1E
-        public static readonly Color SurfaceHover = Color.FromArgb(0x26, 0x26, 0x2A);   // #26262A
-        public static readonly Color Border = Color.FromArgb(0x3A, 0x3A, 0x3E);         // #3A3A3E
-        public static readonly Color BorderLight = Color.FromArgb(0x4E, 0x4E, 0x52);    // #4E4E52
-        public static readonly Color Primary = Color.FromArgb(0x00, 0x7A, 0xFF);        // #007AFF
-        public static readonly Color PrimaryHover = Color.FromArgb(0x14, 0x87, 0xFF);   // #1487FF
-        public static readonly Color PrimaryPressed = Color.FromArgb(0x00, 0x64, 0xD2); // #0064D2
-        public static readonly Color Success = Color.FromArgb(0x28, 0xB4, 0x63);        // #28B463
-        public static readonly Color Warning = Color.FromArgb(0xFF, 0x9F, 0x0A);        // #FF9F0A
-        public static readonly Color Error = Color.FromArgb(0xFF, 0x45, 0x3A);          // #FF453A
-        public static readonly Color TextPrimary = Color.FromArgb(0xFF, 0xFF, 0xFF);    // #FFFFFF
-        public static readonly Color TextSecondary = Color.FromArgb(0xAE, 0xAE, 0xB2);  // #AEAEB2
-        public static readonly Color TextMuted = Color.FromArgb(0xA8, 0xA8, 0xAD);      // #A8A8AD
-        public static readonly Color Thinking = Color.FromArgb(0xA0, 0xA0, 0xA4);       // #A0A0A4 - Visible gray for thinking
-        public static readonly Color UserBubble = Color.FromArgb(0x00, 0x7A, 0xFF);     // #007AFF
-        public static readonly Color AssistantBubble = Color.FromArgb(0x30, 0x30, 0x34);// #303034
-        public static readonly Color CodeBackground = Color.FromArgb(0x14, 0x14, 0x16); // #141416
-        public static readonly Color ScrollBar = Color.FromArgb(0x30, 0x30, 0x34);      // #303034
-        public static readonly Color ScrollBarHover = Color.FromArgb(0x44, 0x44, 0x48); // #444448
+        public static readonly Color Background = Color.FromArgb(0xF5, 0xF6, 0xF8);
+        public static readonly Color Surface = Color.FromArgb(0xFF, 0xFF, 0xFF);
+        public static readonly Color SurfaceHover = Color.FromArgb(0xF8, 0xF9, 0xFC);
+        public static readonly Color Border = Color.FromArgb(0xE5, 0xE8, 0xEE);
+        public static readonly Color BorderLight = Color.FromArgb(0xD9, 0xDD, 0xE6);
+        public static readonly Color Primary = Color.FromArgb(0x59, 0x67, 0xDC);
+        public static readonly Color PrimaryHover = Color.FromArgb(0x4B, 0x58, 0xCB);
+        public static readonly Color PrimaryPressed = Color.FromArgb(0x40, 0x4C, 0xB4);
+        public static readonly Color Success = Color.FromArgb(0x23, 0x85, 0x5B);
+        public static readonly Color Warning = Color.FromArgb(0xA2, 0x74, 0x19);
+        public static readonly Color Error = Color.FromArgb(0xB7, 0x49, 0x43);
+        public static readonly Color TextPrimary = Color.FromArgb(0x20, 0x24, 0x31);
+        public static readonly Color TextSecondary = Color.FromArgb(0x55, 0x5D, 0x6D);
+        public static readonly Color TextMuted = Color.FromArgb(0x73, 0x79, 0x89);
+        public static readonly Color Thinking = Color.FromArgb(0x85, 0x8B, 0x99);
+        public static readonly Color UserBubble = Color.FromArgb(0xF1, 0xF3, 0xF7);
+        public static readonly Color AssistantBubble = Color.FromArgb(0xFF, 0xFF, 0xFF);
+        public static readonly Color CodeBackground = Color.FromArgb(0xF8, 0xF9, 0xFB);
+        public static readonly Color ScrollBar = Color.FromArgb(0xD5, 0xD9, 0xE1);
+        public static readonly Color ScrollBarHover = Color.FromArgb(0xB9, 0xBF, 0xCA);
     }
 
     // ===== BASE CONTROLS WITH DOUBLE BUFFERING =====
@@ -2506,41 +2523,6 @@ namespace LocalAIApp
             this.IntegralHeight = false;
         }
     }
-
-    public class SmoothScrollRichTextBox : RichTextBox
-    {
-        public bool UserAtBottom { get; private set; } = true;
-
-        public SmoothScrollRichTextBox()
-        {
-            this.VScroll += OnVScroll;
-        }
-
-        private void OnVScroll(object sender, EventArgs e)
-        {
-            // Check if scrolled to bottom
-            var pos = GetPositionFromCharIndex(TextLength);
-            UserAtBottom = pos.Y >= ClientRectangle.Height - Font.Height;
-        }
-
-        // Override OnVScroll to track thumb tracking
-        protected override void OnVScroll(EventArgs e)
-        {
-            base.OnVScroll(e);
-            // When user starts dragging thumb, they're not at bottom
-            UserAtBottom = false;
-        }
-
-        protected override void OnMouseWheel(MouseEventArgs e)
-        {
-            base.OnMouseWheel(e);
-            // Check if at bottom after wheel scroll
-            var pos = GetPositionFromCharIndex(TextLength);
-            UserAtBottom = pos.Y >= ClientRectangle.Height - Font.Height;
-        }
-    }
-
-    // ===== CUSTOM CONTROLS - PIXEL PERFECT =====
 
     public class RoundedPanel : DoubleBufferedPanel
     {
@@ -2849,1588 +2831,6 @@ namespace LocalAIApp
 
     // ===== PANELS =====
 
-    public class ChatPanel : DoubleBufferedPanel
-    {
-        private SmoothScrollRichTextBox _chatDisplay;
-        private TableLayoutPanel _chatLayout;
-        private RoundedPanel _toolActivityPanel;
-        private Label _toolActivityIcon;
-        private Label _toolActivityText;
-        private readonly StringBuilder _streamedThinkingPreview = new();
-        private bool _showingThinkingPreview;
-        private bool _isThinking = false;
-        private readonly StringBuilder _pendingStreamLineBreaks = new();
-        private string _pendingThinkingMarkup = "";
-        private readonly Dictionary<(bool IsEmoji, float Size, FontStyle Style), Font> _messageFonts = new();
-        private readonly List<CodeActionRange> _codeActionRanges = new();
-        private readonly List<LinkActionRange> _linkActionRanges = new();
-        private readonly List<ThinkingBlockRange> _thinkingBlockRanges = new();
-        private ThinkingBlockRange? _activeThinkingBlock;
-        private readonly Font _codeFont = new("Consolas", 9f);
-
-        public ChatPanel()
-        {
-            BackColor = ThemeColors.Surface;
-            Padding = new Padding(16);
-            
-            _chatDisplay = new SmoothScrollRichTextBox
-            {
-                Dock = DockStyle.Fill,
-                ReadOnly = true,
-                BackColor = ThemeColors.Surface,
-                ForeColor = ThemeColors.TextPrimary,
-                Font = new Font("Segoe UI", 10f),
-                BorderStyle = BorderStyle.None,
-                DetectUrls = true,
-                ScrollBars = RichTextBoxScrollBars.Vertical,
-                WordWrap = true,
-                HideSelection = true
-            };
-            _chatDisplay.LinkClicked += (s, e) => 
-            {
-                if (!string.IsNullOrEmpty(e.LinkText))
-                    try { Process.Start(new ProcessStartInfo(e.LinkText) { UseShellExecute = true }); } catch { }
-            };
-            _chatDisplay.MouseClick += OnChatDisplayMouseClick;
-            _chatDisplay.MouseMove += OnChatDisplayMouseMove;
-            _chatDisplay.MouseLeave += (s, e) => _chatDisplay.Cursor = Cursors.IBeam;
-
-            _chatLayout = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 2,
-                BackColor = Color.Transparent,
-                CellBorderStyle = TableLayoutPanelCellBorderStyle.None,
-                Margin = new Padding(0),
-                Padding = new Padding(0)
-            };
-            _chatLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-            _chatLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-            _chatLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0f));
-            _chatLayout.Controls.Add(_chatDisplay, 0, 0);
-
-            _toolActivityPanel = new RoundedPanel
-            {
-                Dock = DockStyle.Fill,
-                CornerRadius = 8,
-                BorderColor = ThemeColors.Border,
-                BorderWidth = 1,
-                BackColor = ThemeColors.SurfaceHover,
-                Padding = new Padding(8, 3, 10, 3),
-                Margin = new Padding(0, 6, 0, 0),
-                Visible = false
-            };
-            var activityLayout = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 3,
-                RowCount = 1,
-                BackColor = Color.Transparent,
-                CellBorderStyle = TableLayoutPanelCellBorderStyle.None,
-                Margin = new Padding(0),
-                Padding = new Padding(0)
-            };
-            activityLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 24f));
-            activityLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-            activityLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76f));
-
-            _toolActivityIcon = new Label
-            {
-                Dock = DockStyle.Fill,
-                Text = "●",
-                ForeColor = ThemeColors.Primary,
-                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                TextAlign = ContentAlignment.MiddleCenter
-            };
-            _toolActivityText = new Label
-            {
-                Dock = DockStyle.Fill,
-                Text = "",
-                ForeColor = ThemeColors.TextSecondary,
-                Font = new Font("Segoe UI", 9.5f, FontStyle.Italic),
-                TextAlign = ContentAlignment.MiddleLeft,
-                AutoEllipsis = true
-            };
-            var activityTag = new Label
-            {
-                Dock = DockStyle.Fill,
-                Text = "EN COURS",
-                ForeColor = ThemeColors.Primary,
-                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                TextAlign = ContentAlignment.MiddleRight
-            };
-            activityLayout.Controls.Add(_toolActivityIcon, 0, 0);
-            activityLayout.Controls.Add(_toolActivityText, 1, 0);
-            activityLayout.Controls.Add(activityTag, 2, 0);
-            _toolActivityPanel.Controls.Add(activityLayout);
-            _chatLayout.Controls.Add(_toolActivityPanel, 0, 1);
-
-            Controls.Add(_chatLayout);
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            base.Dispose(disposing);
-
-            if (!disposing)
-                return;
-
-            foreach (var font in _messageFonts.Values)
-                font.Dispose();
-            _messageFonts.Clear();
-            _codeFont.Dispose();
-        }
-
-        public void UpdateTheme()
-        {
-            BackColor = ThemeColors.Surface;
-            _chatDisplay.BackColor = ThemeColors.Surface;
-            _chatDisplay.ForeColor = ThemeColors.TextPrimary;
-            _toolActivityPanel.BackColor = ThemeColors.SurfaceHover;
-            _toolActivityPanel.BorderColor = ThemeColors.Border;
-            _toolActivityIcon.ForeColor = _showingThinkingPreview ? ThemeColors.Thinking : ThemeColors.Primary;
-            _toolActivityText.ForeColor = _showingThinkingPreview ? ThemeColors.Thinking : ThemeColors.TextSecondary;
-        }
-
-        public void Clear()
-        {
-            _chatDisplay.Clear();
-            _codeActionRanges.Clear();
-            _linkActionRanges.Clear();
-            _thinkingBlockRanges.Clear();
-            _activeThinkingBlock = null;
-            _isStreaming = false;
-            _pendingThinkingMarkup = "";
-            _isThinking = false;
-            _streamedThinkingPreview.Clear();
-            ClearToolActivityMessage();
-        }
-
-        public void RenderMessages(IEnumerable<Message> messages)
-        {
-            Clear();
-            foreach (var message in messages ?? Enumerable.Empty<Message>())
-            {
-                AddMessage(
-                    message.Role == "user" ? "Vous :" : "Assistant :",
-                    message.Content ?? "",
-                    message.Role == "user");
-            }
-            _chatDisplay.ScrollToCaret();
-        }
-
-        public void AddMessage(string sender, string content, bool isUser)
-        {
-            var thinkingPreview = !isUser && !(content ?? "").Contains("<think>", StringComparison.Ordinal)
-                ? _streamedThinkingPreview.ToString()
-                : "";
-            _streamedThinkingPreview.Clear();
-            ClearToolActivityMessage();
-            var time = DateTime.Now.ToString("HH:mm");
-            content = NormalizeMessageText(content ?? "");
-            
-            AppendStyled("[" + time + "] ", ThemeColors.TextMuted, false);
-            var senderColor = isUser ? ThemeColors.Primary : ThemeColors.Success;
-            AppendStyled(sender + " ", senderColor, true);
-            if (isUser)
-                AppendInlineMarkdown(content, ThemeColors.TextPrimary, bold: false, italic: false, fontSize: 10f);
-            else
-            {
-                if (thinkingPreview.Length > 0)
-                    AppendCollapsedThinkingContent(thinkingPreview);
-                AppendAssistantContent(content);
-            }
-            AppendStyled("\n\n", ThemeColors.TextPrimary, false);
-            
-            _chatDisplay.ScrollToCaret();
-        }
-
-        public void AddSystemMessage(string content, MessageType type)
-        {
-            content = NormalizeMessageText(content);
-            var color = type switch
-            {
-                MessageType.Success => ThemeColors.Success,
-                MessageType.Warning => ThemeColors.Warning,
-                MessageType.Error => ThemeColors.Error,
-                MessageType.Info => ThemeColors.TextMuted,
-                _ => ThemeColors.TextSecondary
-            };
-            
-            var prefix = type switch
-            {
-                MessageType.Success => "[OK] ",
-                MessageType.Warning => "[ATTENTION] ",
-                MessageType.Error => "[ERREUR] ",
-                MessageType.Info => "[DEBUG] ",
-                _ => "[INFO] "
-            };
-            
-            AppendStyled("[" + DateTime.Now.ToString("HH:mm") + "] " + prefix + content + "\n\n", color, false);
-            _chatDisplay.ScrollToCaret();
-        }
-
-        public void AddToolStatusMessage(string content)
-        {
-            content ??= "";
-            _showingThinkingPreview = false;
-            _toolActivityIcon.ForeColor = ThemeColors.Primary;
-            _toolActivityText.ForeColor = ThemeColors.TextSecondary;
-            _toolActivityText.Text = NormalizeMessageText(content);
-            _toolActivityIcon.Text = content.Contains("Exécution", StringComparison.OrdinalIgnoreCase)
-                ? "▶"
-                : content.Contains("code", StringComparison.OrdinalIgnoreCase)
-                    || content.Contains("fichier", StringComparison.OrdinalIgnoreCase)
-                    || content.Contains("dossier", StringComparison.OrdinalIgnoreCase)
-                    ? "{}"
-                    : "⌕";
-            _toolActivityPanel.Visible = true;
-            _chatLayout.RowStyles[1].Height = 42f;
-            _chatLayout.PerformLayout();
-        }
-
-        public void AppendThinkingPreviewToken(string content)
-        {
-            if (string.IsNullOrEmpty(content))
-                return;
-
-            _streamedThinkingPreview.Append(content);
-            if (!_isStreaming)
-            {
-                _isStreaming = true;
-                _isThinking = false;
-                _pendingStreamLineBreaks.Clear();
-                _pendingThinkingMarkup = "";
-                AppendStreamingMessageHeader();
-            }
-
-            if (_activeThinkingBlock == null || !_activeThinkingBlock.IsPreview)
-            {
-                FinalizeThinkingBlock();
-                BeginThinkingBlock();
-                if (_activeThinkingBlock != null)
-                    _activeThinkingBlock.IsPreview = true;
-            }
-            AppendThinkingBlockContent(content);
-
-            ShowThinkingActivity();
-        }
-
-        public void ShowThinkingActivity()
-        {
-            if (_showingThinkingPreview && _toolActivityPanel.Visible &&
-                string.Equals(_toolActivityText.Text, "Réflexion en cours…", StringComparison.Ordinal))
-                return;
-
-            _showingThinkingPreview = true;
-            _toolActivityIcon.Text = "…";
-            _toolActivityIcon.ForeColor = ThemeColors.Thinking;
-            _toolActivityText.ForeColor = ThemeColors.Thinking;
-
-            _toolActivityText.Text = "Réflexion en cours…";
-            _toolActivityPanel.Visible = true;
-            _chatLayout.RowStyles[1].Height = 42f;
-            _chatLayout.PerformLayout();
-            if (_chatDisplay.UserAtBottom)
-                _chatDisplay.ScrollToCaret();
-        }
-
-        public void ClearThinkingPreview()
-        {
-            if (_activeThinkingBlock?.IsPreview == true)
-                RemoveThinkingBlock(_activeThinkingBlock);
-            _streamedThinkingPreview.Clear();
-            if (_showingThinkingPreview)
-                ClearToolActivityMessage();
-            _showingThinkingPreview = false;
-        }
-
-        private void ClearToolActivityMessage()
-        {
-            if (_toolActivityPanel == null || _chatLayout == null)
-                return;
-            _showingThinkingPreview = false;
-            _toolActivityPanel.Visible = false;
-            _toolActivityText.Text = "";
-            _chatLayout.RowStyles[1].Height = 0f;
-            _chatLayout.PerformLayout();
-        }
-
-        private static string NormalizeMessageText(string text)
-        {
-            return (text ?? "")
-                .Replace("\r\n", "\n")
-                .Replace('\r', '\n')
-                .TrimEnd('\n');
-        }
-
-        private void AppendStyled(string text, Color color, bool bold, bool italic = false,
-                                  float fontSize = 10f, bool underline = false,
-                                  bool atCurrentPosition = false)
-        {
-            if (string.IsNullOrEmpty(text))
-                return;
-
-            var style = (bold ? FontStyle.Bold : FontStyle.Regular) |
-                        (italic ? FontStyle.Italic : FontStyle.Regular) |
-                        (underline ? FontStyle.Underline : FontStyle.Regular);
-
-            var containsEmojiFontRune = false;
-            foreach (var rune in text.EnumerateRunes())
-            {
-                if (!IsEmojiFontRune(rune.Value))
-                    continue;
-                containsEmojiFontRune = true;
-                break;
-            }
-
-            if (!containsEmojiFontRune)
-            {
-                AppendStyledRun(text, color, style, fontSize, usesEmojiFont: false,
-                    atCurrentPosition: atCurrentPosition);
-                return;
-            }
-
-            var run = new StringBuilder();
-            var runUsesEmojiFont = false;
-            var hasRun = false;
-
-            foreach (var rune in text.EnumerateRunes())
-            {
-                var usesEmojiFont = IsEmojiFontRune(rune.Value);
-                if (hasRun && usesEmojiFont != runUsesEmojiFont)
-                {
-                    AppendStyledRun(run.ToString(), color, style, fontSize, runUsesEmojiFont,
-                        atCurrentPosition: atCurrentPosition);
-                    run.Clear();
-                    hasRun = false;
-                }
-
-                if (!hasRun)
-                {
-                    runUsesEmojiFont = usesEmojiFont;
-                    hasRun = true;
-                }
-                run.Append(rune.ToString());
-            }
-
-            if (hasRun)
-                AppendStyledRun(run.ToString(), color, style, fontSize, runUsesEmojiFont,
-                    atCurrentPosition: atCurrentPosition);
-        }
-
-        private void AppendStyledRun(string text, Color color, FontStyle style, float fontSize,
-                                     bool usesEmojiFont, bool atCurrentPosition = false)
-        {
-            if (!atCurrentPosition)
-                _chatDisplay.SelectionStart = _chatDisplay.TextLength;
-            _chatDisplay.SelectionLength = 0;
-            _chatDisplay.SelectionColor = color;
-            var fontKey = (usesEmojiFont, fontSize, style);
-            if (!_messageFonts.TryGetValue(fontKey, out var font))
-            {
-                font = new Font(usesEmojiFont ? "Segoe UI Emoji" : "Segoe UI", fontSize, style);
-                _messageFonts.Add(fontKey, font);
-            }
-            _chatDisplay.SelectionFont = font;
-            if (atCurrentPosition)
-                ReplaceChatSelection(text);
-            else
-                _chatDisplay.AppendText(text);
-        }
-
-        private void ReplaceChatSelection(string text)
-        {
-            var wasReadOnly = _chatDisplay.ReadOnly;
-            if (wasReadOnly)
-                _chatDisplay.ReadOnly = false;
-
-            try
-            {
-                _chatDisplay.SelectedText = text;
-            }
-            finally
-            {
-                _chatDisplay.ReadOnly = wasReadOnly;
-            }
-        }
-
-        private int DeleteChatTextRange(int start, int length)
-        {
-            start = Math.Clamp(start, 0, _chatDisplay.TextLength);
-            var expectedLength = Math.Clamp(length, 0, _chatDisplay.TextLength - start);
-            var remainingLength = expectedLength;
-            var removedLength = 0;
-
-            // RichTextBox can leave a selected range untouched while it is read-only.
-            // Retry from the same start if a line-ending conversion removes fewer
-            // characters than requested, and report the actual deletion to the caller.
-            for (var attempt = 0; attempt < 3 && remainingLength > 0; attempt++)
-            {
-                var oldTextLength = _chatDisplay.TextLength;
-                _chatDisplay.SelectionStart = start;
-                _chatDisplay.SelectionLength = Math.Min(remainingLength, _chatDisplay.TextLength - start);
-                ReplaceChatSelection("");
-
-                var removedThisAttempt = oldTextLength - _chatDisplay.TextLength;
-                if (removedThisAttempt <= 0)
-                    break;
-
-                removedThisAttempt = Math.Min(removedThisAttempt, remainingLength);
-                removedLength += removedThisAttempt;
-                remainingLength -= removedThisAttempt;
-            }
-
-            _chatDisplay.SelectionStart = Math.Min(start, _chatDisplay.TextLength);
-            _chatDisplay.SelectionLength = 0;
-            return removedLength;
-        }
-
-        private static bool IsEmojiFontRune(int value)
-        {
-            return (value >= 0x1F000 && value <= 0x1FAFF) ||
-                   (value >= 0x2600 && value <= 0x27FF) ||
-                   (value >= 0x1F1E6 && value <= 0x1F1FF) ||
-                   value == 0x200D || value == 0xFE0E || value == 0xFE0F;
-        }
-
-        private bool _isStreaming = false;
-        private int _streamStartPos = 0;
-
-        public void StartStreamingMessage()
-        {
-            ClearToolActivityMessage();
-            var messageAlreadyStarted = _isStreaming;
-            _isStreaming = true;
-            _isThinking = false;
-            _pendingStreamLineBreaks.Clear();
-            _pendingThinkingMarkup = "";
-
-            if (!messageAlreadyStarted)
-                AppendStreamingMessageHeader();
-            else if (_activeThinkingBlock?.IsPreview != true)
-                FinalizeThinkingBlock();
-
-            if (_streamedThinkingPreview.Length > 0)
-            {
-                if (_thinkingBlockRanges.LastOrDefault()?.IsPreview != true)
-                {
-                    BeginThinkingBlock();
-                    if (_activeThinkingBlock != null)
-                        _activeThinkingBlock.IsPreview = true;
-                    AppendThinkingBlockContent(_streamedThinkingPreview.ToString());
-                    FinalizeThinkingBlock();
-                }
-                _streamedThinkingPreview.Clear();
-            }
-            
-            _streamStartPos = _chatDisplay.TextLength;
-            _chatDisplay.ScrollToCaret();
-        }
-
-        private void AppendStreamingMessageHeader()
-        {
-            var time = DateTime.Now.ToString("HH:mm");
-            AppendStyled("[" + time + "] ", ThemeColors.TextMuted, false);
-            AppendStyled("Assistant :", ThemeColors.Success, true);
-            _streamStartPos = _chatDisplay.TextLength;
-        }
-
-        public void AppendStreamingToken(string token)
-        {
-            if (!_isStreaming) return;
-            var text = _pendingStreamLineBreaks.Length == 0
-                ? token
-                : _pendingStreamLineBreaks.ToString() + token;
-            _pendingStreamLineBreaks.Clear();
-
-            var contentLength = text.Length;
-            while (contentLength > 0 && (text[contentLength - 1] == '\r' || text[contentLength - 1] == '\n'))
-                contentLength--;
-
-            if (contentLength < text.Length)
-                _pendingStreamLineBreaks.Append(text, contentLength, text.Length - contentLength);
-
-            if (contentLength == 0)
-                return;
-
-            if (contentLength < text.Length)
-                text = text.Substring(0, contentLength);
-
-            AppendThinkingStreamText(text);
-            
-            // Smooth scroll - only auto-scroll if user is at bottom
-            if (_chatDisplay.UserAtBottom)
-                _chatDisplay.ScrollToCaret();
-        }
-
-        public void EndStreamingMessage(string fullContent)
-        {
-            ClearToolActivityMessage();
-            System.Diagnostics.Debug.WriteLine($"[ChatPanel.EndStreamingMessage] START, _isStreaming={_isStreaming}, length={_chatDisplay.TextLength - _streamStartPos}");
-            if (!_isStreaming) 
-            {
-                System.Diagnostics.Debug.WriteLine($"[ChatPanel.EndStreamingMessage] Early return - not streaming");
-                return;
-            }
-            
-            _isStreaming = false;
-            
-            try 
-            {
-                if (_pendingStreamLineBreaks.Length > 0)
-                    AppendThinkingStreamText(_pendingStreamLineBreaks.ToString());
-                if (_pendingThinkingMarkup.Length > 0)
-                {
-                    AppendThinkingSegments(_pendingThinkingMarkup, ref _isThinking);
-                    _pendingThinkingMarkup = "";
-                }
-                FinalizeThinkingBlock();
-                AppendStyled("\n\n", ThemeColors.TextPrimary, false);
-                System.Diagnostics.Debug.WriteLine($"[ChatPanel.EndStreamingMessage] SUCCESS");
-            } 
-            catch (Exception ex) 
-            {
-                System.Diagnostics.Debug.WriteLine($"[ChatPanel.EndStreamingMessage ERROR] {ex.Message}\n{ex.StackTrace}");
-            }
-            finally
-            {
-                _isStreaming = false;
-                _isThinking = false;
-                _pendingThinkingMarkup = "";
-                _pendingStreamLineBreaks.Clear();
-                _streamedThinkingPreview.Clear();
-                _showingThinkingPreview = false;
-            }
-        }
-
-        private void AppendThinkingStreamText(string text)
-        {
-            var combined = _pendingThinkingMarkup + text;
-            _pendingThinkingMarkup = "";
-
-            var processLength = combined.Length;
-            var markers = new[] { "<think>", "</think>" };
-            for (var suffixLength = Math.Min(7, combined.Length); suffixLength > 0; suffixLength--)
-            {
-                var suffix = combined.Substring(combined.Length - suffixLength, suffixLength);
-                if (markers.Any(marker => marker.StartsWith(suffix, StringComparison.Ordinal)))
-                {
-                    processLength = combined.Length - suffixLength;
-                    break;
-                }
-            }
-
-            var incompleteLinkStart = FindIncompleteMarkdownLinkStart(combined);
-            if (incompleteLinkStart >= 0)
-                processLength = Math.Min(processLength, incompleteLinkStart);
-
-            if (processLength < combined.Length)
-                _pendingThinkingMarkup = combined.Substring(processLength);
-            AppendThinkingSegments(combined.Substring(0, processLength), ref _isThinking);
-        }
-
-        private void AppendThinkingSegments(string text, ref bool isThinking)
-        {
-            var position = 0;
-            while (position < text.Length)
-            {
-                var openIndex = text.IndexOf("<think>", position, StringComparison.Ordinal);
-                var closeIndex = text.IndexOf("</think>", position, StringComparison.Ordinal);
-                var isOpening = openIndex >= 0 && (closeIndex < 0 || openIndex < closeIndex);
-                var tagIndex = isOpening ? openIndex : closeIndex;
-                if (tagIndex < 0)
-                {
-                    var remaining = text.Substring(position);
-                    if (isThinking)
-                        AppendThinkingBlockContent(remaining);
-                    else
-                    {
-                        // A streamed response token marks the end of the live reasoning
-                        // preview. Finalize it before appending answer text so a collapsed
-                        // preview cannot absorb the answer at its hidden body position.
-                        if (_activeThinkingBlock?.IsPreview == true)
-                            FinalizeThinkingBlock();
-                        AppendThinkingStyled(remaining, isThinking: false);
-                    }
-                    break;
-                }
-
-                if (tagIndex > position)
-                {
-                    var segment = text.Substring(position, tagIndex - position);
-                    if (isThinking)
-                        AppendThinkingBlockContent(segment);
-                    else
-                    {
-                        if (_activeThinkingBlock?.IsPreview == true)
-                            FinalizeThinkingBlock();
-                        AppendThinkingStyled(segment, isThinking: false);
-                    }
-                }
-
-                if (isOpening)
-                {
-                    FinalizeThinkingBlock();
-                    isThinking = true;
-                }
-                else
-                {
-                    FinalizeThinkingBlock();
-                    isThinking = false;
-                }
-                position = tagIndex + (isOpening ? "<think>".Length : "</think>".Length);
-            }
-        }
-
-        private void AppendThinkingStyled(string text, bool isThinking, bool atCurrentPosition = false)
-        {
-            AppendInlineMarkdown(text,
-                isThinking ? ThemeColors.Thinking : ThemeColors.TextPrimary,
-                bold: false,
-                italic: isThinking,
-                fontSize: isThinking ? 9f : 10f,
-                atCurrentPosition: atCurrentPosition);
-        }
-
-        private void BeginThinkingBlock()
-        {
-            if (_activeThinkingBlock != null)
-                return;
-
-            var textLengthBeforeSeparator = _chatDisplay.TextLength;
-            if (_chatDisplay.TextLength > 0 && !char.IsWhiteSpace(_chatDisplay.Text[_chatDisplay.TextLength - 1]))
-                AppendStyled(" ", ThemeColors.TextPrimary, false);
-            var leadingSpaceLength = _chatDisplay.TextLength - textLengthBeforeSeparator;
-
-            const string header = "▸ Réflexion";
-            var block = new ThinkingBlockRange
-            {
-                Start = _chatDisplay.TextLength,
-                HeaderLength = header.Length,
-                LeadingSpaceLength = leadingSpaceLength
-            };
-            AppendStyled(header, ThemeColors.Thinking, bold: false, italic: true, fontSize: 9f);
-            AppendStyled("\n", ThemeColors.Thinking, bold: false, italic: true, fontSize: 9f);
-            _chatDisplay.SelectionStart = _chatDisplay.TextLength;
-            block.BodyStart = _chatDisplay.SelectionStart;
-            _thinkingBlockRanges.Add(block);
-            _activeThinkingBlock = block;
-        }
-
-        private void RemoveThinkingBlock(ThinkingBlockRange block)
-        {
-            var deleteStart = Math.Max(0, block.Start - block.LeadingSpaceLength);
-            var deleteEnd = block.BodyStart + block.BodyLength;
-            if (deleteEnd <= deleteStart)
-                return;
-
-            var deletedLength = DeleteChatTextRange(deleteStart, deleteEnd - deleteStart);
-            if (deletedLength != deleteEnd - deleteStart)
-                return;
-            _codeActionRanges.RemoveAll(item =>
-                item.Start < deleteEnd && item.Start + item.Length > block.BodyStart);
-            _linkActionRanges.RemoveAll(item =>
-                item.Start < deleteEnd && item.Start + item.Length > block.BodyStart);
-            _thinkingBlockRanges.Remove(block);
-            ShiftRangesAfterDeletion(deleteEnd, deleteEnd - deleteStart);
-            if (_activeThinkingBlock == block)
-                _activeThinkingBlock = null;
-        }
-
-        private void AppendThinkingBlockContent(string text)
-        {
-            if (string.IsNullOrEmpty(text))
-                return;
-
-            if (_activeThinkingBlock == null)
-                BeginThinkingBlock();
-
-            var block = _activeThinkingBlock;
-            if (block == null)
-                return;
-
-            block.Content.Append(text);
-            if (!block.IsExpanded)
-                return;
-
-            var insertionIndex = block.BodyStart + block.BodyLength;
-            var oldTextLength = _chatDisplay.TextLength;
-            var existingCodeActionCount = _codeActionRanges.Count;
-            var existingLinkActionCount = _linkActionRanges.Count;
-            _chatDisplay.SelectionStart = insertionIndex;
-            _chatDisplay.SelectionLength = 0;
-            AppendThinkingStyled(text, isThinking: true, atCurrentPosition: true);
-            var insertedLength = GetInsertedTextLength(insertionIndex, oldTextLength);
-            block.BodyLength += insertedLength;
-            ShiftRangesAfterInsertion(insertionIndex, insertedLength,
-                existingCodeActionCount, existingLinkActionCount);
-        }
-
-        private void AppendCollapsedThinkingContent(string content)
-        {
-            if (string.IsNullOrEmpty(content))
-                return;
-
-            BeginThinkingBlock();
-            AppendThinkingBlockContent(content);
-            FinalizeThinkingBlock();
-        }
-
-        private void FinalizeThinkingBlock()
-        {
-            var block = _activeThinkingBlock;
-            if (block == null)
-                return;
-
-            var separatorLength = GetThinkingSeparatorLength(block.Content.ToString());
-            if (block.IsExpanded && separatorLength > 0)
-            {
-                var insertionIndex = block.BodyStart + block.BodyLength;
-                var oldTextLength = _chatDisplay.TextLength;
-                var existingCodeActionCount = _codeActionRanges.Count;
-                var existingLinkActionCount = _linkActionRanges.Count;
-                _chatDisplay.SelectionStart = insertionIndex;
-                _chatDisplay.SelectionLength = 0;
-                AppendThinkingStyled(new string('\n', separatorLength), isThinking: true, atCurrentPosition: true);
-                var insertedLength = GetInsertedTextLength(insertionIndex, oldTextLength);
-                block.BodyLength += insertedLength;
-                ShiftRangesAfterInsertion(insertionIndex, insertedLength,
-                    existingCodeActionCount, existingLinkActionCount);
-            }
-
-            _activeThinkingBlock = null;
-        }
-
-        private void ToggleThinkingBlock(ThinkingBlockRange block)
-        {
-            if (block.Content.Length == 0)
-                return;
-
-            var bodyStart = GetThinkingBodyStart(block);
-            block.BodyStart = bodyStart;
-            var visibleBodyLength = GetVisibleThinkingBodyLength(block, bodyStart);
-            if (visibleBodyLength.HasValue)
-            {
-                block.IsExpanded = visibleBodyLength.Value > 0;
-                block.BodyLength = visibleBodyLength.Value;
-            }
-
-            if (block.IsExpanded)
-            {
-                var bodyEnd = bodyStart + block.BodyLength;
-                var deletedLength = DeleteChatTextRange(bodyStart, block.BodyLength);
-                if (deletedLength != block.BodyLength)
-                {
-                    _chatDisplay.SelectionLength = 0;
-                    return;
-                }
-
-                _codeActionRanges.RemoveAll(item =>
-                    item.Start < bodyEnd && item.Start + item.Length > bodyStart);
-                _linkActionRanges.RemoveAll(item =>
-                    item.Start < bodyEnd && item.Start + item.Length > bodyStart);
-                _thinkingBlockRanges.RemoveAll(item => item != block &&
-                    item.Start >= bodyStart && item.Start < bodyEnd);
-                ShiftRangesAfterDeletion(bodyEnd, block.BodyLength);
-                block.BodyLength = 0;
-                block.IsExpanded = false;
-            }
-            else
-            {
-                var content = block.Content.ToString();
-                _chatDisplay.SelectionStart = bodyStart;
-                _chatDisplay.SelectionLength = 0;
-                var oldTextLength = _chatDisplay.TextLength;
-                var existingCodeActionCount = _codeActionRanges.Count;
-                var existingLinkActionCount = _linkActionRanges.Count;
-                block.IsExpanded = true;
-                AppendThinkingStyled(content, isThinking: true, atCurrentPosition: true);
-                var separatorLength = GetThinkingSeparatorLength(content);
-                if (_activeThinkingBlock != block && separatorLength > 0)
-                    AppendThinkingStyled(new string('\n', separatorLength), isThinking: true, atCurrentPosition: true);
-                var insertedLength = GetInsertedTextLength(bodyStart, oldTextLength);
-                block.BodyLength = insertedLength;
-                ShiftRangesAfterInsertion(bodyStart, insertedLength,
-                    existingCodeActionCount, existingLinkActionCount);
-            }
-
-            var header = block.IsExpanded ? "▾ Réflexion" : "▸ Réflexion";
-            _chatDisplay.SelectionStart = block.Start;
-            _chatDisplay.SelectionLength = block.HeaderLength;
-            _chatDisplay.SelectionColor = ThemeColors.Thinking;
-            var fontKey = (false, 9f, FontStyle.Italic);
-            if (!_messageFonts.TryGetValue(fontKey, out var font))
-            {
-                font = new Font("Segoe UI", 9f, FontStyle.Italic);
-                _messageFonts.Add(fontKey, font);
-            }
-            _chatDisplay.SelectionFont = font;
-            ReplaceChatSelection(header);
-            block.HeaderLength = header.Length;
-
-            _chatDisplay.SelectionStart = block.IsExpanded
-                ? Math.Min(block.BodyStart + block.BodyLength, _chatDisplay.TextLength)
-                : Math.Min(block.Start + block.HeaderLength, _chatDisplay.TextLength);
-            _chatDisplay.SelectionLength = 0;
-        }
-
-        private void ReindexThinkingBlocks()
-        {
-            if (_thinkingBlockRanges.Count == 0)
-                return;
-
-            var text = _chatDisplay.Text;
-            var searchStart = 0;
-            foreach (var block in _thinkingBlockRanges)
-            {
-                const string collapsedHeader = "▸ Réflexion";
-                const string expandedHeader = "▾ Réflexion";
-                var expectedStart = Math.Clamp(block.Start, searchStart, text.Length);
-
-                string? matchedHeader = null;
-                var headerStart = -1;
-                if (text.AsSpan(expectedStart).StartsWith(collapsedHeader.AsSpan(), StringComparison.Ordinal))
-                {
-                    matchedHeader = collapsedHeader;
-                    headerStart = expectedStart;
-                }
-                else if (text.AsSpan(expectedStart).StartsWith(expandedHeader.AsSpan(), StringComparison.Ordinal))
-                {
-                    matchedHeader = expandedHeader;
-                    headerStart = expectedStart;
-                }
-                else
-                {
-                    var collapsedStart = text.IndexOf(collapsedHeader, searchStart, StringComparison.Ordinal);
-                    var expandedStart = text.IndexOf(expandedHeader, searchStart, StringComparison.Ordinal);
-                    if (collapsedStart >= 0 && (expandedStart < 0 || collapsedStart < expandedStart))
-                    {
-                        matchedHeader = collapsedHeader;
-                        headerStart = collapsedStart;
-                    }
-                    else if (expandedStart >= 0)
-                    {
-                        matchedHeader = expandedHeader;
-                        headerStart = expandedStart;
-                    }
-                }
-
-                if (matchedHeader == null || headerStart < 0)
-                    continue;
-
-                block.Start = headerStart;
-                block.HeaderLength = matchedHeader.Length;
-                block.IsExpanded = matchedHeader == expandedHeader;
-                block.BodyStart = GetThinkingBodyStart(block);
-
-                var visibleBodyLength = GetVisibleThinkingBodyLength(block, block.BodyStart);
-                if (visibleBodyLength.HasValue)
-                {
-                    block.BodyLength = visibleBodyLength.Value;
-                    block.IsExpanded = visibleBodyLength.Value > 0;
-                }
-
-                searchStart = block.BodyStart;
-                if (block.IsExpanded)
-                    searchStart = Math.Max(searchStart, Math.Min(text.Length, block.BodyStart + block.BodyLength));
-            }
-        }
-
-        private int GetThinkingBodyStart(ThinkingBlockRange block)
-        {
-            var text = _chatDisplay.Text;
-            var headerEnd = block.Start + block.HeaderLength;
-            if (headerEnd >= 0 && headerEnd < text.Length)
-            {
-                if (text[headerEnd] == '\r')
-                    return headerEnd + (headerEnd + 1 < text.Length && text[headerEnd + 1] == '\n' ? 2 : 1);
-                if (text[headerEnd] == '\n')
-                    return headerEnd + 1;
-            }
-            return Math.Clamp(block.BodyStart, 0, _chatDisplay.TextLength);
-        }
-
-        private int? GetVisibleThinkingBodyLength(ThinkingBlockRange block, int bodyStart)
-        {
-            if (_activeThinkingBlock == block)
-                return block.IsExpanded ? Math.Max(0, block.BodyLength) : 0;
-
-            var content = block.Content.ToString()
-                .Replace("\r\n", "\n", StringComparison.Ordinal)
-                .Replace('\r', '\n');
-            var text = _chatDisplay.Text;
-            if (content.Length == 0)
-                return 0;
-            if (bodyStart < 0 || bodyStart + content.Length > text.Length)
-                return null;
-
-            var visibleLength = 0;
-            var copiesFound = 0;
-            while (copiesFound < 64 && bodyStart + visibleLength + content.Length <= text.Length &&
-                   text.AsSpan(bodyStart + visibleLength, content.Length).SequenceEqual(content.AsSpan()))
-            {
-                visibleLength += content.Length;
-                copiesFound++;
-                visibleLength += CountLeadingLineBreakCharacters(
-                    text, bodyStart + visibleLength, GetThinkingSeparatorLength(content));
-            }
-
-            return copiesFound > 0 ? visibleLength : null;
-        }
-
-        private static int CountLeadingLineBreakCharacters(string text, int start, int requiredLineBreaks)
-        {
-            var characterCount = 0;
-            var lineBreakCount = 0;
-            while (lineBreakCount < requiredLineBreaks && start + characterCount < text.Length)
-            {
-                var current = text[start + characterCount];
-                if (current == '\r')
-                {
-                    characterCount++;
-                    if (start + characterCount < text.Length && text[start + characterCount] == '\n')
-                        characterCount++;
-                    lineBreakCount++;
-                }
-                else if (current == '\n')
-                {
-                    characterCount++;
-                    lineBreakCount++;
-                }
-                else
-                {
-                    break;
-                }
-            }
-
-            return characterCount;
-        }
-
-        private static int GetThinkingSeparatorLength(string content)
-        {
-            var trailingLineBreaks = 0;
-            for (var index = content.Length - 1; index >= 0;)
-            {
-                if (content[index] == '\n')
-                {
-                    trailingLineBreaks++;
-                    index--;
-                    if (index >= 0 && content[index] == '\r')
-                        index--;
-                }
-                else if (content[index] == '\r')
-                {
-                    trailingLineBreaks++;
-                    index--;
-                }
-                else
-                {
-                    break;
-                }
-            }
-
-            // Keep one empty line between expanded reasoning and the assistant answer.
-            return Math.Max(0, 2 - trailingLineBreaks);
-        }
-
-        private void ShiftRangesAfterInsertion(int insertionStart, int insertedLength,
-                                               int existingCodeActionCount,
-                                               int existingLinkActionCount)
-        {
-            if (insertedLength <= 0)
-                return;
-
-            for (var index = 0; index < Math.Min(existingCodeActionCount, _codeActionRanges.Count); index++)
-                if (_codeActionRanges[index].Start >= insertionStart)
-                    _codeActionRanges[index].Start += insertedLength;
-            for (var index = 0; index < Math.Min(existingLinkActionCount, _linkActionRanges.Count); index++)
-                if (_linkActionRanges[index].Start >= insertionStart)
-                    _linkActionRanges[index].Start += insertedLength;
-            foreach (var item in _thinkingBlockRanges)
-                if (item.Start >= insertionStart)
-                {
-                    item.Start += insertedLength;
-                    item.BodyStart += insertedLength;
-                }
-        }
-
-        private int GetInsertedTextLength(int insertionStart, int oldTextLength)
-        {
-            var textLengthDelta = _chatDisplay.TextLength - oldTextLength;
-            if (textLengthDelta > 0)
-                return textLengthDelta;
-
-            return Math.Max(0, _chatDisplay.SelectionStart - insertionStart);
-        }
-
-        private void ShiftRangesAfterDeletion(int deletedEnd, int deletedLength)
-        {
-            if (deletedLength <= 0)
-                return;
-
-            foreach (var item in _codeActionRanges)
-                if (item.Start >= deletedEnd)
-                    item.Start -= deletedLength;
-            foreach (var item in _linkActionRanges)
-                if (item.Start >= deletedEnd)
-                    item.Start -= deletedLength;
-            foreach (var item in _thinkingBlockRanges)
-                if (item.Start >= deletedEnd)
-                {
-                    item.Start -= deletedLength;
-                    item.BodyStart -= deletedLength;
-                }
-        }
-
-        private bool IsThinkingBlockHit(ThinkingBlockRange block, int textIndex)
-        {
-            var textLength = _chatDisplay.TextLength;
-            var safeIndex = Math.Clamp(textIndex, 0, textLength);
-            var startLine = _chatDisplay.GetLineFromCharIndex(block.Start);
-            var lastBlockIndex = block.IsExpanded
-                ? block.BodyStart + block.BodyLength - 1
-                : block.Start + block.HeaderLength - 1;
-            lastBlockIndex = Math.Clamp(lastBlockIndex, block.Start, textLength);
-            var endLine = _chatDisplay.GetLineFromCharIndex(lastBlockIndex);
-            var clickLine = _chatDisplay.GetLineFromCharIndex(safeIndex);
-            return clickLine >= startLine && clickLine <= endLine;
-        }
-
-        private bool IsThinkingHeaderHit(ThinkingBlockRange block, Point location)
-        {
-            if (block.Start < 0 || block.Start + block.HeaderLength > _chatDisplay.TextLength)
-                return false;
-
-            var label = _chatDisplay.Text.Substring(block.Start, block.HeaderLength);
-            if (label != "▸ Réflexion" && label != "▾ Réflexion")
-                return false;
-
-            var position = _chatDisplay.GetPositionFromCharIndex(block.Start);
-            var width = TextRenderer.MeasureText(label, _chatDisplay.Font).Width + 10;
-            var height = Math.Max(18, _chatDisplay.Font.Height + 4);
-            var hitBox = new Rectangle(
-                Math.Max(0, position.X - 4),
-                Math.Max(0, position.Y - 2),
-                width,
-                height);
-            return hitBox.Contains(location);
-        }
-
-        private void AppendInlineMarkdown(string text, Color color, bool bold, bool italic,
-                                          float fontSize, string? linkUrl = null,
-                                          bool atCurrentPosition = false)
-        {
-            if (string.IsNullOrEmpty(text))
-                return;
-
-            var segment = new StringBuilder();
-            var boldMarkerOpen = false;
-            var italicMarkerOpen = false;
-            var currentBold = bold;
-            var currentItalic = italic;
-
-            void FlushSegment()
-            {
-                if (segment.Length == 0)
-                    return;
-
-                var segmentColor = linkUrl == null
-                    ? color
-                    : color == ThemeColors.Thinking ? color : ThemeColors.PrimaryHover;
-                AppendStyled(segment.ToString(), segmentColor, currentBold, currentItalic,
-                    fontSize, underline: linkUrl != null, atCurrentPosition: atCurrentPosition);
-                segment.Clear();
-            }
-
-            for (var index = 0; index < text.Length;)
-            {
-                if (linkUrl == null && text[index] == '[' &&
-                    TryParseMarkdownLink(text, index, out var nextIndex, out var label, out var destination))
-                {
-                    FlushSegment();
-                    var linkStart = atCurrentPosition ? _chatDisplay.SelectionStart : _chatDisplay.TextLength;
-                    AppendInlineMarkdown(label, color, currentBold, currentItalic, fontSize, destination,
-                        atCurrentPosition);
-                    var linkLength = atCurrentPosition
-                        ? _chatDisplay.SelectionStart - linkStart
-                        : _chatDisplay.TextLength - linkStart;
-                    if (linkLength > 0)
-                    {
-                        _linkActionRanges.Add(new LinkActionRange
-                        {
-                            Start = linkStart,
-                            Length = linkLength,
-                            Url = destination
-                        });
-                    }
-                    index = nextIndex;
-                    continue;
-                }
-
-                if (text[index] == '\\' && index + 1 < text.Length &&
-                    (char.IsPunctuation(text[index + 1]) || char.IsSymbol(text[index + 1])))
-                {
-                    segment.Append(text[index + 1]);
-                    index += 2;
-                    continue;
-                }
-
-                if (index + 1 < text.Length && text[index] == '*' && text[index + 1] == '*')
-                {
-                    if (boldMarkerOpen || text.IndexOf("**", index + 2, StringComparison.Ordinal) >= 0)
-                    {
-                        FlushSegment();
-                        currentBold = !currentBold;
-                        boldMarkerOpen = !boldMarkerOpen;
-                        index += 2;
-                        continue;
-                    }
-                }
-                else if (text[index] == '*' &&
-                         (italicMarkerOpen || text.IndexOf('*', index + 1) >= 0))
-                {
-                    FlushSegment();
-                    currentItalic = !currentItalic;
-                    italicMarkerOpen = !italicMarkerOpen;
-                    index++;
-                    continue;
-                }
-
-                segment.Append(text[index]);
-                index++;
-            }
-
-            FlushSegment();
-        }
-
-        private static bool TryParseMarkdownLink(string text, int start, out int nextIndex,
-                                                 out string label, out string destination)
-        {
-            nextIndex = start + 1;
-            label = "";
-            destination = "";
-            if (start < 0 || start >= text.Length || text[start] != '[')
-                return false;
-
-            var closeBracket = FindMarkdownClosingBracket(text, start);
-            if (closeBracket < 0 || closeBracket + 1 >= text.Length || text[closeBracket + 1] != '(')
-                return false;
-
-            var closeParenthesis = FindMarkdownClosingParenthesis(text, closeBracket + 1);
-            if (closeParenthesis < 0)
-                return false;
-
-            label = text.Substring(start + 1, closeBracket - start - 1);
-            var rawDestination = text.Substring(closeBracket + 2, closeParenthesis - closeBracket - 2).Trim();
-            if (rawDestination.StartsWith("<", StringComparison.Ordinal))
-            {
-                var angleEnd = rawDestination.IndexOf('>');
-                if (angleEnd <= 1)
-                    return false;
-                rawDestination = rawDestination.Substring(1, angleEnd - 1);
-            }
-            else
-            {
-                var titleStart = FindMarkdownWhitespace(rawDestination);
-                if (titleStart >= 0)
-                    rawDestination = rawDestination.Substring(0, titleStart);
-            }
-
-            destination = UnescapeMarkdown(rawDestination.Trim());
-            if (!Uri.TryCreate(destination, UriKind.Absolute, out var uri))
-                return false;
-
-            var isWebOrEmailLink = uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
-                                   uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
-                                   uri.Scheme.Equals(Uri.UriSchemeMailto, StringComparison.OrdinalIgnoreCase);
-            var isGeneratedImageLink = false;
-            if (uri.IsFile && !uri.IsUnc)
-            {
-                try
-                {
-                    var generatedImagesDirectory = Path.GetFullPath(
-                        ImageGeneratorForm.GetConfiguredOutputDirectory());
-                    var generatedImagesPrefix = Path.EndsInDirectorySeparator(generatedImagesDirectory)
-                        ? generatedImagesDirectory
-                        : generatedImagesDirectory + Path.DirectorySeparatorChar;
-                    var linkedFile = Path.GetFullPath(uri.LocalPath);
-                    isGeneratedImageLink = linkedFile.StartsWith(generatedImagesPrefix, StringComparison.OrdinalIgnoreCase) &&
-                                           Path.GetExtension(linkedFile).Equals(".png", StringComparison.OrdinalIgnoreCase);
-                }
-                catch (Exception)
-                {
-                    isGeneratedImageLink = false;
-                }
-            }
-
-            if (!isWebOrEmailLink && !isGeneratedImageLink)
-                return false;
-
-            destination = uri.AbsoluteUri;
-            nextIndex = closeParenthesis + 1;
-            return label.Length > 0;
-        }
-
-        private static int FindMarkdownClosingBracket(string text, int openingBracket)
-        {
-            var nestedBrackets = 0;
-            for (var index = openingBracket + 1; index < text.Length; index++)
-            {
-                if (text[index] == '\\')
-                {
-                    index++;
-                    continue;
-                }
-                if (text[index] == '[')
-                    nestedBrackets++;
-                else if (text[index] == ']')
-                {
-                    if (nestedBrackets == 0)
-                        return index;
-                    nestedBrackets--;
-                }
-            }
-            return -1;
-        }
-
-        private static int FindMarkdownClosingParenthesis(string text, int openingParenthesis)
-        {
-            var depth = 1;
-            for (var index = openingParenthesis + 1; index < text.Length; index++)
-            {
-                if (text[index] == '\\')
-                {
-                    index++;
-                    continue;
-                }
-                if (text[index] == '(')
-                    depth++;
-                else if (text[index] == ')' && --depth == 0)
-                    return index;
-            }
-            return -1;
-        }
-
-        private static int FindMarkdownWhitespace(string text)
-        {
-            for (var index = 0; index < text.Length; index++)
-            {
-                if (text[index] == '\\')
-                {
-                    index++;
-                    continue;
-                }
-                if (char.IsWhiteSpace(text[index]))
-                    return index;
-            }
-            return -1;
-        }
-
-        private static string UnescapeMarkdown(string text)
-        {
-            var result = new StringBuilder(text.Length);
-            for (var index = 0; index < text.Length; index++)
-            {
-                if (text[index] == '\\' && index + 1 < text.Length &&
-                    (char.IsPunctuation(text[index + 1]) || char.IsSymbol(text[index + 1])))
-                    index++;
-                result.Append(text[index]);
-            }
-            return result.ToString();
-        }
-
-        private static int FindIncompleteMarkdownLinkStart(string text)
-        {
-            for (var index = 0; index < text.Length; index++)
-            {
-                if (text[index] != '[' || IsMarkdownEscaped(text, index))
-                    continue;
-
-                var closeBracket = FindMarkdownClosingBracket(text, index);
-                if (closeBracket < 0 || closeBracket + 1 == text.Length)
-                    return index;
-                if (text[closeBracket + 1] != '(')
-                {
-                    index = closeBracket;
-                    continue;
-                }
-
-                var closeParenthesis = FindMarkdownClosingParenthesis(text, closeBracket + 1);
-                if (closeParenthesis < 0)
-                    return index;
-                index = closeParenthesis;
-            }
-            return -1;
-        }
-
-        private static bool IsMarkdownEscaped(string text, int index)
-        {
-            var slashes = 0;
-            for (var previous = index - 1; previous >= 0 && text[previous] == '\\'; previous--)
-                slashes++;
-            return slashes % 2 != 0;
-        }
-
-        private void AppendAssistantContent(string content)
-        {
-            var parts = ParseCodeBlocks(content);
-            var isThinking = false;
-            foreach (var part in parts)
-            {
-                if (part.IsCode)
-                {
-                    if (isThinking)
-                        AppendThinkingBlockContent($"```{part.Language}\n{part.Content}\n```");
-                    else
-                        RenderCodeBlock(part.Language, part.Content);
-                }
-                else
-                    AppendThinkingSegments(part.Content, ref isThinking);
-            }
-            FinalizeThinkingBlock();
-        }
-
-        private List<CodeBlockPart> ParseCodeBlocks(string text)
-        {
-            var parts = new List<CodeBlockPart>();
-            var position = 0;
-            while (position < text.Length)
-            {
-                var codeStart = text.IndexOf("```", position, StringComparison.Ordinal);
-                if (codeStart < 0)
-                {
-                    if (position < text.Length)
-                        parts.Add(new CodeBlockPart { IsCode = false, Content = text.Substring(position) });
-                    break;
-                }
-
-                if (codeStart > position)
-                    parts.Add(new CodeBlockPart { IsCode = false, Content = text.Substring(position, codeStart - position) });
-
-                var languageStart = codeStart + 3;
-                var languageEnd = text.IndexOf('\n', languageStart);
-                if (languageEnd < 0)
-                {
-                    parts.Add(new CodeBlockPart { IsCode = false, Content = text.Substring(codeStart) });
-                    break;
-                }
-
-                var language = text.Substring(languageStart, languageEnd - languageStart).Trim();
-                if (string.IsNullOrEmpty(language)) language = "text";
-
-                var codeContentStart = languageEnd + 1;
-                var codeEnd = text.IndexOf("```", codeContentStart, StringComparison.Ordinal);
-                var hasClosingFence = codeEnd >= 0;
-                if (!hasClosingFence)
-                    codeEnd = text.Length;
-
-                var code = text.Substring(codeContentStart, codeEnd - codeContentStart).Trim('\r', '\n');
-                parts.Add(new CodeBlockPart { IsCode = true, Language = language, Content = code });
-                if (!hasClosingFence)
-                {
-                    break;
-                }
-
-                position = codeEnd + 3;
-            }
-
-            return parts;
-        }
-
-        private void RenderCodeBlock(string language, string code)
-        {
-            var displayLanguage = string.IsNullOrWhiteSpace(language) ? "text" : language.Trim();
-            _chatDisplay.SelectionStart = _chatDisplay.TextLength;
-            _chatDisplay.SelectionLength = 0;
-            _chatDisplay.SelectionBackColor = ThemeColors.CodeBackground;
-            AppendStyled($"\n  {displayLanguage}\n", ThemeColors.TextSecondary, true, fontSize: 8.5f);
-
-            _chatDisplay.SelectionStart = _chatDisplay.TextLength;
-            _chatDisplay.SelectionLength = 0;
-            _chatDisplay.SelectionColor = ThemeColors.TextPrimary;
-            _chatDisplay.SelectionFont = _codeFont;
-            _chatDisplay.SelectionBackColor = ThemeColors.CodeBackground;
-            _chatDisplay.AppendText("  " + code + "\n");
-
-            AppendStyled("  ", ThemeColors.TextSecondary, false);
-            AddCodeAction("[ Copier ]", code, displayLanguage, download: false);
-            AppendStyled("    ", ThemeColors.TextSecondary, false);
-            AddCodeAction("[ Télécharger ]", code, displayLanguage, download: true);
-            AppendStyled("\n", ThemeColors.TextPrimary, false);
-            _chatDisplay.SelectionBackColor = ThemeColors.Surface;
-            AppendStyled("\n", ThemeColors.TextPrimary, false);
-        }
-
-        private void AddCodeAction(string label, string code, string language, bool download)
-        {
-            var start = _chatDisplay.TextLength;
-            AppendStyled(label, ThemeColors.PrimaryHover, bold: true, underline: true);
-            _codeActionRanges.Add(new CodeActionRange
-            {
-                Start = start,
-                Length = label.Length,
-                Code = code,
-                Language = language,
-                Download = download
-            });
-        }
-
-        private void OnChatDisplayMouseMove(object? sender, MouseEventArgs e)
-        {
-            var index = _chatDisplay.GetCharIndexFromPosition(e.Location);
-            var overLink = _linkActionRanges.Any(link =>
-                index >= link.Start && index < link.Start + link.Length);
-            var overCodeAction = _codeActionRanges.Any(action =>
-                index >= action.Start && index < action.Start + action.Length);
-            var overThinkingBlock = _thinkingBlockRanges.Any(block => IsThinkingBlockHit(block, index));
-            _chatDisplay.Cursor = overLink || overCodeAction || overThinkingBlock
-                ? Cursors.Hand
-                : Cursors.IBeam;
-        }
-
-        private void OnChatDisplayMouseClick(object? sender, MouseEventArgs e)
-        {
-            if (e.Button != MouseButtons.Left)
-                return;
-
-            var index = _chatDisplay.GetCharIndexFromPosition(e.Location);
-            ReindexThinkingBlocks();
-
-            var thinkingHeader = _thinkingBlockRanges.FirstOrDefault(block => IsThinkingHeaderHit(block, e.Location));
-            if (thinkingHeader != null)
-            {
-                ToggleThinkingBlock(thinkingHeader);
-                return;
-            }
-
-            var link = _linkActionRanges.FirstOrDefault(item =>
-                index >= item.Start && index < item.Start + item.Length);
-            if (link != null)
-            {
-                try
-                {
-                    Process.Start(new ProcessStartInfo(link.Url) { UseShellExecute = true });
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(FindForm(), "Impossible d'ouvrir le lien : " + ex.Message,
-                        "Ouverture du lien", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-                return;
-            }
-
-            var thinkingBlock = _thinkingBlockRanges.FirstOrDefault(block => IsThinkingBlockHit(block, index));
-            if (thinkingBlock != null)
-            {
-                ToggleThinkingBlock(thinkingBlock);
-                return;
-            }
-
-            var action = _codeActionRanges.FirstOrDefault(item =>
-                index >= item.Start && index < item.Start + item.Length);
-            if (action == null)
-                return;
-
-            if (!action.Download)
-            {
-                try { Clipboard.SetText(action.Code); }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(FindForm(), "Impossible de copier le code : " + ex.Message,
-                        "Copie du code", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-                return;
-            }
-
-            var extension = GetCodeFileExtension(action.Language);
-            using var dialog = new SaveFileDialog
-            {
-                FileName = "script" + extension,
-                Filter = $"Fichier {extension} (*{extension})|*{extension}|Tous les fichiers (*.*)|*.*",
-                AddExtension = true,
-                DefaultExt = extension.TrimStart('.')
-            };
-            if (dialog.ShowDialog(FindForm()) != DialogResult.OK)
-                return;
-
-            try
-            {
-                File.WriteAllText(dialog.FileName, action.Code, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(FindForm(), "Impossible d'enregistrer le code : " + ex.Message,
-                    "Téléchargement du code", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private static string GetCodeFileExtension(string language)
-        {
-            return language.Trim().ToLowerInvariant() switch
-            {
-                "python" or "py" => ".py",
-                "csharp" or "c#" or "cs" => ".cs",
-                "javascript" or "js" => ".js",
-                "typescript" or "ts" => ".ts",
-                "html" => ".html",
-                "css" => ".css",
-                "json" => ".json",
-                "bash" or "sh" or "shell" => ".sh",
-                "powershell" or "ps1" or "pwsh" => ".ps1",
-                "sql" => ".sql",
-                "java" => ".java",
-                "c" => ".c",
-                "cpp" or "c++" => ".cpp",
-                "rust" or "rs" => ".rs",
-                "go" => ".go",
-                "ruby" or "rb" => ".rb",
-                "php" => ".php",
-                "xml" => ".xml",
-                "yaml" or "yml" => ".yml",
-                "markdown" or "md" => ".md",
-                "text" or "txt" => ".txt",
-                _ => ".txt"
-            };
-        }
-
-        private sealed class CodeActionRange
-        {
-            public int Start { get; set; }
-            public int Length { get; init; }
-            public string Code { get; init; } = "";
-            public string Language { get; init; } = "text";
-            public bool Download { get; init; }
-        }
-
-        private sealed class LinkActionRange
-        {
-            public int Start { get; set; }
-            public int Length { get; init; }
-            public string Url { get; init; } = "";
-        }
-
-        private sealed class ThinkingBlockRange
-        {
-            public int Start { get; set; }
-            public int BodyStart { get; set; }
-            public int HeaderLength { get; set; }
-            public int LeadingSpaceLength { get; set; }
-            public StringBuilder Content { get; } = new();
-            public bool IsExpanded { get; set; }
-            public bool IsPreview { get; set; }
-            public int BodyLength { get; set; }
-        }
-        
-        private class CodeBlockPart
-        {
-            public bool IsCode { get; set; }
-            public string Language { get; set; }
-            public string Content { get; set; }
-        }
-    }
-
     public class InputPanel : DoubleBufferedPanel
     {
         public event EventHandler SendClicked;
@@ -4447,68 +2847,29 @@ namespace LocalAIApp
 
         public InputPanel()
         {
-            Height = 180;
+            Height = 154;
             BackColor = ThemeColors.Surface;
-            Padding = new Padding(16, 12, 16, 12);
+            Padding = new Padding(16, 9, 16, 9);
 
             var layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 3,
+                RowCount = 2,
                 BackColor = Color.Transparent,
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None
             };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));  // Header row (model + char count)
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));  // Input box
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));  // Send button
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
 
-            // Header row with model label + char count
-            var headerLayout = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 2,
-                RowCount = 1,
-                BackColor = Color.Transparent,
-                CellBorderStyle = TableLayoutPanelCellBorderStyle.None
-            };
-            headerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            headerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100F));
-
-            _modelLabel = new Label
-            {
-                Dock = DockStyle.Fill,
-                Text = "Aucun modele selectionne",
-                ForeColor = ThemeColors.TextMuted,
-                Font = new Font("Segoe UI", 9.5f),
-                TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(4, 0, 0, 0),
-                AutoSize = false
-            };
-            headerLayout.Controls.Add(_modelLabel, 0, 0);
-
-            _charCount = new Label
-            {
-                Dock = DockStyle.Fill,
-                Text = "0 / 4000",
-                ForeColor = ThemeColors.TextMuted,
-                Font = new Font("Segoe UI", 9f),
-                TextAlign = ContentAlignment.MiddleRight,
-                AutoSize = false
-            };
-            headerLayout.Controls.Add(_charCount, 1, 0);
-
-            layout.Controls.Add(headerLayout, 0, 0);
-
-            // Input box - fills available space
             _inputBox = new ModernTextBox
             {
                 Dock = DockStyle.Fill,
                 Multiline = true,
                 Font = new Font("Segoe UI", 10f),
                 ScrollBars = ScrollBars.Vertical,
-                PlaceholderText = "Ecrivez votre message... (Entree pour envoyer, Maj+Entree pour nouvelle ligne)"
+                PlaceholderText = "Écrivez votre message… (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)"
             };
             _inputBox.KeyDown += (s, e) =>
             {
@@ -4519,21 +2880,56 @@ namespace LocalAIApp
                 }
             };
             _inputBox.TextChanged += (s, e) => UpdateCharCount();
-            layout.Controls.Add(_inputBox, 0, 1);
+            layout.Controls.Add(_inputBox, 0, 0);
 
-            // Send button - full width, below input box
+            var footer = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 3,
+                RowCount = 1,
+                BackColor = Color.Transparent,
+                CellBorderStyle = TableLayoutPanelCellBorderStyle.None,
+                Padding = new Padding(0, 4, 0, 0)
+            };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 78F));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96F));
+
+            _modelLabel = new Label
+            {
+                Dock = DockStyle.Fill,
+                Text = "Aucun modèle sélectionné",
+                ForeColor = ThemeColors.TextMuted,
+                Font = new Font("Segoe UI", 9f),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(4, 0, 0, 0),
+                AutoEllipsis = true
+            };
+            footer.Controls.Add(_modelLabel, 0, 0);
+            _charCount = new Label
+            {
+                Dock = DockStyle.Fill,
+                Text = "0 / 4000",
+                ForeColor = ThemeColors.TextMuted,
+                Font = new Font("Segoe UI", 9f),
+                TextAlign = ContentAlignment.MiddleCenter,
+                AutoSize = false
+            };
+            footer.Controls.Add(_charCount, 1, 0);
+
             _sendBtn = new ModernButton
             {
-                Text = "Envoyer",
+                Text = "Envoyer ↑",
                 Dock = DockStyle.Fill,
                 BackColorNormal = ThemeColors.Primary,
                 BackColorHover = ThemeColors.PrimaryHover,
                 BackColorPressed = ThemeColors.PrimaryPressed,
                 Enabled = false,
-                Margin = new Padding(0, 8, 0, 8),
-                Height = 40
+                Margin = new Padding(5, 2, 0, 2),
+                Height = 34
             };
-            layout.Controls.Add(_sendBtn, 0, 2);
+            footer.Controls.Add(_sendBtn, 2, 0);
+            layout.Controls.Add(footer, 0, 1);
             _sendBtn.Click += (s, e) =>
             {
                 if (_isGenerating)
@@ -4642,16 +3038,41 @@ namespace LocalAIApp
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 6,
+                RowCount = 7,
                 BackColor = Color.Transparent,
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None
             };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 80F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 74F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 46F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 54F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46F));
+
+            var brandPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8, 4, 4, 4), BackColor = Color.Transparent };
+            var brandMark = new Label
+            {
+                Dock = DockStyle.Left,
+                Width = 38,
+                Text = "L",
+                TextAlign = ContentAlignment.MiddleCenter,
+                ForeColor = Color.White,
+                BackColor = ThemeColors.Primary,
+                Font = new Font("Segoe UI", 15f, FontStyle.Bold)
+            };
+            var brandText = new Label
+            {
+                Dock = DockStyle.Fill,
+                Text = "Local IA Runner\nAssistant local",
+                TextAlign = ContentAlignment.MiddleLeft,
+                ForeColor = ThemeColors.TextPrimary,
+                Font = new Font("Segoe UI", 10f, FontStyle.Bold),
+                Padding = new Padding(10, 0, 0, 0)
+            };
+            brandPanel.Controls.Add(brandText);
+            brandPanel.Controls.Add(brandMark);
+            layout.Controls.Add(brandPanel, 0, 0);
 
             // Folder selector
             var folderPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 0, 8) };
@@ -4663,8 +3084,8 @@ namespace LocalAIApp
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None
             };
             folderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            folderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100F));
-            folderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100F));
+            folderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 78F));
+            folderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 42F));
 
             _folderTextBox = new TextBox
             {
@@ -4705,7 +3126,7 @@ namespace LocalAIApp
             folderLayout.Controls.Add(_refreshBtn, 2, 0);
 
             folderPanel.Controls.Add(folderLayout);
-            layout.Controls.Add(folderPanel, 0, 0);
+            layout.Controls.Add(folderPanel, 0, 1);
 
             _modelsTitle = new Label
             {
@@ -4717,7 +3138,7 @@ namespace LocalAIApp
                 Padding = new Padding(4),
                 AutoSize = false
             };
-            layout.Controls.Add(_modelsTitle, 0, 1);
+            layout.Controls.Add(_modelsTitle, 0, 2);
 
             var modelsContainer = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4, 0, 4, 0) };
             var modelsLayout = new TableLayoutPanel
@@ -4772,7 +3193,7 @@ namespace LocalAIApp
             modelsLayout.SetRowSpan(_modelsLoadingPanel, 2);
 
             modelsContainer.Controls.Add(modelsLayout);
-            layout.Controls.Add(modelsContainer, 0, 2);
+            layout.Controls.Add(modelsContainer, 0, 3);
 
             _convsTitle = new Label
             {
@@ -4784,7 +3205,7 @@ namespace LocalAIApp
                 Padding = new Padding(4),
                 AutoSize = false
             };
-            layout.Controls.Add(_convsTitle, 0, 3);
+            layout.Controls.Add(_convsTitle, 0, 4);
 
             _conversationsListBox = new DoubleBufferedListBox
             {
@@ -4794,7 +3215,7 @@ namespace LocalAIApp
                 Font = new Font("Segoe UI", 9f),
                 BorderStyle = BorderStyle.None,
                 SelectionMode = SelectionMode.One,
-                ItemHeight = 80,
+                ItemHeight = 72,
                 Margin = new Padding(4, 0, 4, 0)
             };
             _conversationsListBox.DrawItem += DrawConversationItem;
@@ -4819,7 +3240,7 @@ namespace LocalAIApp
                     }
                 }
             };
-            layout.Controls.Add(_conversationsListBox, 0, 4);
+            layout.Controls.Add(_conversationsListBox, 0, 5);
 
             _newConvBtn = new ModernButton
             {
@@ -4827,13 +3248,13 @@ namespace LocalAIApp
                 Dock = DockStyle.Fill,
                 Margin = new Padding(4),
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-                BackColorNormal = ThemeColors.Success,
-                BackColorHover = Color.FromArgb(50, 200, 110),
-                BackColorPressed = Color.FromArgb(35, 160, 85),
+                BackColorNormal = ThemeColors.Primary,
+                BackColorHover = ThemeColors.PrimaryHover,
+                BackColorPressed = ThemeColors.PrimaryPressed,
                 CornerRadius = 10
             };
             _newConvBtn.Click += (s, e) => NewConversationRequested?.Invoke(this, EventArgs.Empty);
-            layout.Controls.Add(_newConvBtn, 0, 5);
+            layout.Controls.Add(_newConvBtn, 0, 6);
 
             Controls.Add(layout);
         }
@@ -5020,10 +3441,10 @@ namespace LocalAIApp
             var rect = e.Bounds;
             rect.Inflate(-4, -2);
             
-            var backColor = selected ? Color.FromArgb(0, 122, 255) : Color.FromArgb(45, 45, 48);
+            var backColor = selected ? ThemeColors.Primary : ThemeColors.Surface;
             using (var path = GetRoundedRectPath(rect, 8))
             using (var brush = new SolidBrush(backColor))
-            using (var pen = new Pen(selected ? ThemeColors.Primary : Color.FromArgb(45, 45, 48), selected ? 1.5f : 1f))
+            using (var pen = new Pen(selected ? ThemeColors.Primary : ThemeColors.Border, selected ? 1.5f : 1f))
             {
                 g.FillPath(brush, path);
                 g.DrawPath(pen, path);
@@ -5038,17 +3459,17 @@ namespace LocalAIApp
             
             TextRenderer.DrawText(g, model.TypeIcon + "  " + model.Name, titleFont,
                 new Rectangle(rect.X + 12, rect.Y + 4, rect.Width - 24, 22),
-                Color.White, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                selected ? Color.White : ThemeColors.TextPrimary, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             TextRenderer.DrawText(g, typeText, metaFont,
                 new Rectangle(rect.X + 12, rect.Y + 26, rect.Width - 24, 18),
-                Color.White, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                selected ? Color.White : ThemeColors.TextSecondary, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
 
             var pathText = model.Folder ?? model.Path;
             if (pathText.Length > 60) pathText = "..." + pathText.Substring(pathText.Length - 57);
             
             TextRenderer.DrawText(g, pathText, pathFont,
                 new Rectangle(rect.X + 12, rect.Y + 44, rect.Width - 24, 18),
-                Color.White, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                selected ? Color.White : ThemeColors.TextMuted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
             // Draw focus rectangle
             if ((e.State & DrawItemState.Focus) == DrawItemState.Focus && (e.State & DrawItemState.NoFocusRect) != DrawItemState.NoFocusRect)
@@ -5073,10 +3494,10 @@ namespace LocalAIApp
             var rect = e.Bounds;
             rect.Inflate(-4, -2);
             
-            var backColor = selected ? Color.FromArgb(0, 122, 255) : Color.FromArgb(45, 45, 48);
+            var backColor = selected ? ThemeColors.Primary : ThemeColors.Surface;
             using (var path = GetRoundedRectPath(rect, 8))
             using (var brush = new SolidBrush(backColor))
-            using (var pen = new Pen(selected ? ThemeColors.Primary : Color.FromArgb(45, 45, 48), selected ? 1.5f : 1f))
+            using (var pen = new Pen(selected ? ThemeColors.Primary : ThemeColors.Border, selected ? 1.5f : 1f))
             {
                 g.FillPath(brush, path);
                 g.DrawPath(pen, path);

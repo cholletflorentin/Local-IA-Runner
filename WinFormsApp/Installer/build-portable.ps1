@@ -30,6 +30,8 @@ if (-not (Test-Path -LiteralPath (Join-Path $stageDir 'Local IA Runner.exe')) -o
     -not (Test-Path -LiteralPath (Join-Path $stageDir 'PythonRuntime\python.exe')) -or
     -not (Test-Path -LiteralPath (Join-Path $stageDir 'PythonBackend\ai_backend.py')) -or
     -not (Test-Path -LiteralPath (Join-Path $stageDir 'llama-bin\llama-server.exe')) -or
+    -not (Test-Path -LiteralPath (Join-Path $stageDir 'Assets\chat-surface.html')) -or
+    -not (Test-Path -LiteralPath (Join-Path $stageDir 'Dependencies\MicrosoftEdgeWebView2Setup.exe')) -or
     -not (Test-Path -LiteralPath (Join-Path $stageDir 'stable-diffusion.cpp\windows-vulkan\sd-server.exe')) -or
     -not (Test-Path -LiteralPath (Join-Path $stageDir 'stable-diffusion.cpp\windows-cpu\sd-server.exe'))) {
     throw "La publication autonome est incomplète : $stageDir"

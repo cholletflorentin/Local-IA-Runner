@@ -46,4 +46,23 @@ Name: "{autoprograms}\Local IA Runner\Local IA Runner"; Filename: "{app}\Local I
 Name: "{autodesktop}\Local IA Runner"; Filename: "{app}\Local IA Runner.exe"; WorkingDir: "{app}"; IconFilename: "{app}\Local IA Runner.exe"; Tasks: desktopicon
 
 [Run]
+Filename: "{app}\Dependencies\MicrosoftEdgeWebView2Setup.exe"; Parameters: "/silent /install"; StatusMsg: "Vérification du runtime Microsoft Edge WebView2..."; Flags: waituntilterminated runhidden; Check: not IsWebView2RuntimeInstalled
 Filename: "{app}\Local IA Runner.exe"; Description: "Lancer Local IA Runner"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function IsWebView2RuntimeInstalled: Boolean;
+var
+  Version: string;
+begin
+  Version := '';
+  Result := RegQueryStringValue(HKLM,
+    'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+    'pv', Version);
+  if (not Result) or (Version = '') or (Version = '0.0.0.0') then begin
+    Version := '';
+    Result := RegQueryStringValue(HKCU,
+      'Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+      'pv', Version);
+  end;
+  Result := Result and (Version <> '') and (Version <> '0.0.0.0');
+end;

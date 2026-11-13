@@ -48,7 +48,7 @@ if (Test-Path -LiteralPath $stageDir) {
 }
 New-Item -ItemType Directory -Force -Path $stageDir, $downloadDir, $outputDir | Out-Null
 
-Write-Host '[1/6] Publication autonome .NET x64...'
+Write-Host '[1/7] Publication autonome .NET x64...'
 & dotnet publish $projectFile `
     --configuration Release `
     --runtime win-x64 `
@@ -113,7 +113,34 @@ function Get-VerifiedDownload {
     }
 }
 
-Write-Host '[2/6] Téléchargement et vérification du Python portable...'
+Write-Host '[2/7] Téléchargement et vérification de WebView2...'
+$webViewBootstrapperCache = Join-Path $downloadDir 'MicrosoftEdgeWebView2Setup.exe'
+$webViewBootstrapperUrl = 'https://go.microsoft.com/fwlink/?LinkId=2124703'
+$webViewBootstrapperValid = $false
+if (Test-Path -LiteralPath $webViewBootstrapperCache) {
+    $cachedSignature = Get-AuthenticodeSignature -FilePath $webViewBootstrapperCache
+    $webViewBootstrapperValid = $cachedSignature.Status -eq [System.Management.Automation.SignatureStatus]::Valid -and
+        $cachedSignature.SignerCertificate.Subject -match 'Microsoft Corporation'
+}
+if (-not $webViewBootstrapperValid) {
+    Remove-Item -LiteralPath $webViewBootstrapperCache -Force -ErrorAction SilentlyContinue
+    & curl.exe --fail --location --silent --show-error --retry 3 --connect-timeout 30 --max-time 300 --output $webViewBootstrapperCache $webViewBootstrapperUrl
+    if ($LASTEXITCODE -ne 0) {
+        Remove-Item -LiteralPath $webViewBootstrapperCache -Force -ErrorAction SilentlyContinue
+        throw "Téléchargement du bootstrapper WebView2 échoué (curl $LASTEXITCODE)."
+    }
+}
+$webViewSignature = Get-AuthenticodeSignature -FilePath $webViewBootstrapperCache
+if ($webViewSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+    $webViewSignature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
+    Remove-Item -LiteralPath $webViewBootstrapperCache -Force -ErrorAction SilentlyContinue
+    throw 'Le bootstrapper WebView2 n’a pas une signature Microsoft valide.'
+}
+$webViewDependencies = Join-Path $stageDir 'Dependencies'
+New-Item -ItemType Directory -Force -Path $webViewDependencies | Out-Null
+Copy-Item -LiteralPath $webViewBootstrapperCache -Destination (Join-Path $webViewDependencies 'MicrosoftEdgeWebView2Setup.exe') -Force
+
+Write-Host '[3/7] Téléchargement et vérification du Python portable...'
 $pythonZip = Join-Path $downloadDir 'python-3.13.17-embed-amd64.zip'
 Get-VerifiedDownload `
     -Uri 'https://www.python.org/ftp/python/3.13.17/python-3.13.17-embed-amd64.zip' `
@@ -131,7 +158,7 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Le runtime Python embarqué ne peut pas charger les modules standard requis.'
 }
 
-Write-Host '[3/6] Téléchargement et vérification du moteur llama.cpp CPU...'
+Write-Host '[4/7] Téléchargement et vérification du moteur llama.cpp CPU...'
 $llamaZip = Join-Path $downloadDir 'llama-b12244-bin-win-cpu-x64.zip'
 Get-VerifiedDownload `
     -Uri 'https://github.com/ggml-org/llama.cpp/releases/download/b12244/llama-b12244-bin-win-cpu-x64.zip' `
@@ -159,7 +186,7 @@ foreach ($runtimeName in @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.d
     Copy-Item -LiteralPath $runtimeSource -Destination (Join-Path $llamaDir $runtimeName) -Force
 }
 
-Write-Host '[4/6] Téléchargement et vérification des moteurs stable-diffusion.cpp Vulkan et CPU...'
+Write-Host '[5/7] Téléchargement et vérification des moteurs stable-diffusion.cpp Vulkan et CPU...'
 $sdReleases = @()
 $sdApiError = $null
 try {
@@ -264,7 +291,8 @@ New-Item -ItemType Directory -Force -Path $licensesDir | Out-Null
 $nugetRoot = if ($env:NUGET_PACKAGES) { $env:NUGET_PACKAGES } else { Join-Path $env:USERPROFILE '.nuget\packages' }
 $licenseFiles = @(
     [pscustomobject]@{ Source = Join-Path $PSScriptRoot 'licenses\llama.cpp-LICENSE.txt'; Destination = Join-Path $licensesDir 'llama.cpp-LICENSE.txt' },
-    [pscustomobject]@{ Source = Join-Path $nugetRoot 'newtonsoft.json\13.0.3\LICENSE.md'; Destination = Join-Path $licensesDir 'Newtonsoft.Json-LICENSE.md' }
+    [pscustomobject]@{ Source = Join-Path $nugetRoot 'newtonsoft.json\13.0.3\LICENSE.md'; Destination = Join-Path $licensesDir 'Newtonsoft.Json-LICENSE.md' },
+    [pscustomobject]@{ Source = Join-Path $nugetRoot 'microsoft.web.webview2\1.0.4314.35\LICENSE.txt'; Destination = Join-Path $licensesDir 'Microsoft.Web.WebView2-LICENSE.txt' }
 )
 $dotnetCommand = Get-Command dotnet -ErrorAction Stop
 $dotnetInstallDir = Split-Path -Parent $dotnetCommand.Source
@@ -279,7 +307,7 @@ foreach ($licensePair in $licenseFiles) {
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'THIRD-PARTY-NOTICES.txt') -Destination (Join-Path $stageDir 'THIRD-PARTY-NOTICES.txt') -Force
 
-Write-Host '[5/6] Recherche du compilateur Inno Setup...'
+Write-Host '[6/7] Recherche du compilateur Inno Setup...'
 if (-not $InnoCompiler) {
     $compilerCandidates = @(
         (Join-Path $env:ProgramFiles 'Inno Setup 7\ISCC.exe'),
@@ -294,7 +322,7 @@ if (-not $InnoCompiler -or -not (Test-Path -LiteralPath $InnoCompiler)) {
     throw 'ISCC.exe introuvable. Installe Inno Setup 6 ou 7, ou passe son chemin avec -InnoCompiler.'
 }
 
-Write-Host '[6/6] Création de LocalIARunner-Setup-x64.exe...'
+Write-Host '[7/7] Création de LocalIARunner-Setup-x64.exe...'
 $oldStage = $env:LOCALIA_INSTALLER_STAGE
 $oldOutput = $env:LOCALIA_INSTALLER_OUTPUT
 $oldRoot = $env:LOCALIA_PROJECT_ROOT

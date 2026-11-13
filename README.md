@@ -14,6 +14,8 @@ Application Windows WinForms (.NET 10) pour exécuter des modèles de texte GGUF
 - Détection rapide des GGUF dans le dossier choisi, LM Studio, Jan, GPT4All et d'autres emplacements locaux courants
 - Recherche complète facultative des modèles GGUF depuis la racine de tous les lecteurs fixes
 - Mise à jour automatique depuis la dernière release GitHub, avec vérification SHA-256
+- Interface de conversation modernisée avec mise en forme Markdown, liens cliquables et réflexion repliable
+- Blocs de code avec commandes intégrées pour copier ou enregistrer les scripts
 
 ## Installation
 
@@ -22,6 +24,10 @@ Pour compiler les versions installable et portable depuis les sources, installer
 - l'installateur `artifacts\installer\LocalIARunner-Setup-x64.exe`;
 - le dossier portable versionné `artifacts\portable\LocalIARunner-Portable-x64-<version>`, à lancer avec `Local IA Runner.exe`;
 - l'archive portable `artifacts\portable\LocalIARunner-Portable-x64-<version>.zip`, à extraire avant de lancer l'application.
+
+L'affichage du chat utilise Microsoft Edge WebView2. L'installateur vérifie le runtime et installe le bootstrapper officiel de Microsoft si nécessaire. La version portable contient aussi ce bootstrapper : si le runtime manque, l'application propose de l'installer ou d'ouvrir la page officielle de téléchargement. Le runtime est déjà présent sur Windows 11 et peut aussi être installé séparément depuis la [page Microsoft WebView2](https://developer.microsoft.com/microsoft-edge/webview2/).
+
+Les réponses acceptent un sous-ensemble courant de Markdown : titres, listes, citations, liens, emphase et blocs de code. Le HTML fourni par les modèles est affiché comme du texte et n'est pas exécuté. Les blocs de code peuvent être copiés ou téléchargés depuis la conversation.
 
 Le workflow `.github/workflows/release.yml` publie un GitHub Release uniquement sur demande : lancement manuel depuis l'onglet Actions ou commit dont le message commence par `[publish-release]`. Chaque release reçoit une version croissante `1.0.<numéro du build>`, une description basée sur le sujet et le corps du commit de publication, l'installateur ainsi que l'archive portable versionnée. Le manifeste `latest-release.json` est aussi joint à chaque release pour éviter la limite de requêtes de l'API GitHub; une copie est maintenue dans le dépôt. Les compilations locales suppriment les anciennes versions portables après la génération de la nouvelle.
 
