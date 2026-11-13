@@ -139,7 +139,6 @@ namespace LocalAIApp
             _sidebarPanel.ConversationSelected += OnConversationSelected;
             _sidebarPanel.NewConversationRequested += OnNewConversation;
             _sidebarPanel.DeleteConversationRequested += OnDeleteConversation;
-            _sidebarPanel.RefreshModelsRequested += OnRefreshModels;
             
             // Chat Area - Fill
             var chatContainer = new Panel { Dock = DockStyle.Fill, BackColor = ThemeColors.Background };
@@ -153,7 +152,7 @@ namespace LocalAIApp
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None
             };
             chatLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            chatLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 154F));
+            chatLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 180F));
 
             _chatPanel = new ChatPanel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8) };
             chatLayout.Controls.Add(_chatPanel, 0, 0);
@@ -178,6 +177,7 @@ namespace LocalAIApp
             _menuStrip.NewConversationClicked += OnNewConversation;
             _menuStrip.OpenFolderClicked += OnOpenConversationsFolder;
             _menuStrip.SetModelsFolderClicked += OnSetModelsFolder;
+            _menuStrip.RefreshModelsClicked += OnRefreshModels;
             _menuStrip.SearchKnownModelsClicked += (s, e) => ScanModelsFolder(forceQuickScan: true);
             _menuStrip.SearchAllModelsClicked += (s, e) => ScanModelsFolder(forceFullScan: true);
             _menuStrip.CancelModelSearchClicked += (s, e) => CancelModelScan();
@@ -2573,7 +2573,7 @@ namespace LocalAIApp
         [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public Color TextColor { get; set; } = Color.Empty;
         [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-        public int CornerRadius { get; set; } = 10;
+        public int CornerRadius { get; set; } = 0;
         private bool _hovered, _pressed;
 
         public ModernButton()
@@ -2748,7 +2748,7 @@ namespace LocalAIApp
                 var focusRect = Rectangle.Inflate(rect, -2, -2);
                 if (focusRect.Width > 0 && focusRect.Height > 0)
                 {
-                    using var focusPath = GetRoundedRectPath(focusRect, Math.Max(2, CornerRadius - 2));
+                    using var focusPath = GetRoundedRectPath(focusRect, Math.Max(0, CornerRadius - 2));
                     using var focusPen = new Pen(ThemeColors.Primary, 1.5f);
                     g.DrawPath(focusPen, focusPath);
                 }
@@ -2857,7 +2857,6 @@ namespace LocalAIApp
 
         private ModernTextBox _inputBox;
         private ModernButton _sendBtn;
-        private Label _charCount;
         private Label _modelLabel;
         private bool _ready = false;
         private bool _modelSelected = false;
@@ -2866,7 +2865,7 @@ namespace LocalAIApp
 
         public InputPanel()
         {
-            Height = 160;
+            Height = 180;
             BackColor = ThemeColors.Surface;
             Padding = new Padding(16, 9, 16, 9);
 
@@ -2880,7 +2879,7 @@ namespace LocalAIApp
             };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70F));
 
             _inputBox = new ModernTextBox
             {
@@ -2898,21 +2897,20 @@ namespace LocalAIApp
                     if (_ready && _modelSelected && !_isGenerating) SendClicked?.Invoke(this, EventArgs.Empty);
                 }
             };
-            _inputBox.TextChanged += (s, e) => UpdateCharCount();
             layout.Controls.Add(_inputBox, 0, 0);
 
             var footer = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 3,
-                RowCount = 1,
+                ColumnCount = 1,
+                RowCount = 2,
                 BackColor = Color.Transparent,
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None,
-                Padding = new Padding(0, 4, 0, 0)
+                Padding = Padding.Empty
             };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 84F));
-            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 136F));
+            footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 24F));
+            footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
             _modelLabel = new Label
             {
@@ -2925,31 +2923,20 @@ namespace LocalAIApp
                 AutoEllipsis = true
             };
             footer.Controls.Add(_modelLabel, 0, 0);
-            _charCount = new Label
-            {
-                Dock = DockStyle.Fill,
-                Text = "0 / 4000",
-                ForeColor = ThemeColors.TextMuted,
-                Font = new Font("Segoe UI", 9f),
-                TextAlign = ContentAlignment.MiddleCenter,
-                AutoSize = false
-            };
-            footer.Controls.Add(_charCount, 1, 0);
 
             _sendBtn = new ModernButton
             {
-                Text = "Envoyer  ↑",
+                Text = "Envoyer",
                 Dock = DockStyle.Fill,
                 BackColorNormal = ThemeColors.Primary,
                 BackColorHover = ThemeColors.PrimaryHover,
                 BackColorPressed = ThemeColors.PrimaryPressed,
                 Enabled = false,
-                Margin = new Padding(5, 0, 0, 2),
+                Margin = Padding.Empty,
                 Font = new Font("Segoe UI", 10f, FontStyle.Bold),
-                CornerRadius = 10,
-                Height = 40
+                Height = 46
             };
-            footer.Controls.Add(_sendBtn, 2, 0);
+            footer.Controls.Add(_sendBtn, 0, 1);
             layout.Controls.Add(footer, 0, 1);
             _sendBtn.Click += (s, e) =>
             {
@@ -3005,14 +2992,7 @@ namespace LocalAIApp
         {
             _sendBtn.Enabled = _ready && _modelSelected && !_isCancelling;
             _inputBox.Enabled = _ready && !_isGenerating;
-            _sendBtn.Text = _isCancelling ? "Arrêt…" : _isGenerating ? "Annuler" : "Envoyer  ↑";
-        }
-
-        private void UpdateCharCount()
-        {
-            var len = _inputBox.Text.Length;
-            _charCount.Text = len + " / 4000";
-            _charCount.ForeColor = len > 3800 ? ThemeColors.Error : len > 3500 ? ThemeColors.Warning : ThemeColors.TextMuted;
+            _sendBtn.Text = _isCancelling ? "Arrêt…" : _isGenerating ? "Annuler" : "Envoyer";
         }
 
         public void UpdateTheme()
@@ -3030,11 +3010,9 @@ namespace LocalAIApp
         public event EventHandler<string> ConversationSelected;
         public event EventHandler NewConversationRequested;
         public event EventHandler<string> DeleteConversationRequested;
-        public event EventHandler RefreshModelsRequested;
 
         private TextBox _folderTextBox;
         private ModernButton _browseBtn;
-        private ModernButton _refreshBtn;
         private ModernButton _newConvBtn;
         private DoubleBufferedListBox _modelsListBox;
         private DoubleBufferedListBox _conversationsListBox;
@@ -3059,11 +3037,10 @@ namespace LocalAIApp
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 7,
+                RowCount = 6,
                 BackColor = Color.Transparent,
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None
             };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 74F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 46F));
@@ -3071,42 +3048,17 @@ namespace LocalAIApp
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 54F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46F));
 
-            var brandPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8, 4, 4, 4), BackColor = Color.Transparent };
-            var brandMark = new Label
-            {
-                Dock = DockStyle.Left,
-                Width = 38,
-                Text = "L",
-                TextAlign = ContentAlignment.MiddleCenter,
-                ForeColor = Color.White,
-                BackColor = ThemeColors.Primary,
-                Font = new Font("Segoe UI", 15f, FontStyle.Bold)
-            };
-            var brandText = new Label
-            {
-                Dock = DockStyle.Fill,
-                Text = "Local IA Runner\nAssistant local",
-                TextAlign = ContentAlignment.MiddleLeft,
-                ForeColor = ThemeColors.TextPrimary,
-                Font = new Font("Segoe UI", 10f, FontStyle.Bold),
-                Padding = new Padding(10, 0, 0, 0)
-            };
-            brandPanel.Controls.Add(brandText);
-            brandPanel.Controls.Add(brandMark);
-            layout.Controls.Add(brandPanel, 0, 0);
-
             // Folder selector
-            var folderPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 0, 8) };
+            var folderPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 8, 0, 8) };
             var folderLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 3,
+                ColumnCount = 2,
                 BackColor = Color.Transparent,
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None
             };
             folderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             folderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90F));
-            folderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 42F));
 
             _folderTextBox = new TextBox
             {
@@ -3133,21 +3085,8 @@ namespace LocalAIApp
             _browseBtn.Click += (s, e) => BrowseFolder();
             folderLayout.Controls.Add(_browseBtn, 1, 0);
 
-            _refreshBtn = new ModernButton
-            {
-                Text = "⟳",
-                Dock = DockStyle.Fill,
-                Margin = new Padding(0, 0, 4, 0),
-                Font = new Font("Segoe UI", 12f),
-                BackColorNormal = ThemeColors.Primary,
-                BackColorHover = ThemeColors.PrimaryHover,
-                BackColorPressed = ThemeColors.PrimaryPressed,
-            };
-            _refreshBtn.Click += (s, e) => RefreshModelsRequested?.Invoke(this, EventArgs.Empty);
-            folderLayout.Controls.Add(_refreshBtn, 2, 0);
-
             folderPanel.Controls.Add(folderLayout);
-            layout.Controls.Add(folderPanel, 0, 1);
+            layout.Controls.Add(folderPanel, 0, 0);
 
             _modelsTitle = new Label
             {
@@ -3159,7 +3098,7 @@ namespace LocalAIApp
                 Padding = new Padding(4),
                 AutoSize = false
             };
-            layout.Controls.Add(_modelsTitle, 0, 2);
+            layout.Controls.Add(_modelsTitle, 0, 1);
 
             var modelsContainer = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4, 0, 4, 0) };
             var modelsLayout = new TableLayoutPanel
@@ -3214,7 +3153,7 @@ namespace LocalAIApp
             modelsLayout.SetRowSpan(_modelsLoadingPanel, 2);
 
             modelsContainer.Controls.Add(modelsLayout);
-            layout.Controls.Add(modelsContainer, 0, 3);
+            layout.Controls.Add(modelsContainer, 0, 2);
 
             _convsTitle = new Label
             {
@@ -3226,7 +3165,7 @@ namespace LocalAIApp
                 Padding = new Padding(4),
                 AutoSize = false
             };
-            layout.Controls.Add(_convsTitle, 0, 4);
+            layout.Controls.Add(_convsTitle, 0, 3);
 
             _conversationsListBox = new DoubleBufferedListBox
             {
@@ -3261,7 +3200,7 @@ namespace LocalAIApp
                     }
                 }
             };
-            layout.Controls.Add(_conversationsListBox, 0, 5);
+            layout.Controls.Add(_conversationsListBox, 0, 4);
 
             _newConvBtn = new ModernButton
             {
@@ -3272,10 +3211,9 @@ namespace LocalAIApp
                 BackColorNormal = ThemeColors.Primary,
                 BackColorHover = ThemeColors.PrimaryHover,
                 BackColorPressed = ThemeColors.PrimaryPressed,
-                CornerRadius = 10
             };
             _newConvBtn.Click += (s, e) => NewConversationRequested?.Invoke(this, EventArgs.Empty);
-            layout.Controls.Add(_newConvBtn, 0, 6);
+            layout.Controls.Add(_newConvBtn, 0, 5);
 
             Controls.Add(layout);
         }
@@ -3312,7 +3250,6 @@ namespace LocalAIApp
             }
             _modelsLoadingPanel.Visible = loading;
             _modelsListBox.Visible = !loading;
-            _refreshBtn.Enabled = !loading;
             if (loading) _modelsLoadingPanel.BringToFront();
             else _modelsListBox.BringToFront();
         }
@@ -3690,6 +3627,7 @@ namespace LocalAIApp
         public event EventHandler NewConversationClicked;
         public event EventHandler OpenFolderClicked;
         public event EventHandler SetModelsFolderClicked;
+        public event EventHandler? RefreshModelsClicked;
         public event EventHandler SearchKnownModelsClicked;
         public event EventHandler SearchAllModelsClicked;
         public event EventHandler CancelModelSearchClicked;
@@ -3712,6 +3650,7 @@ namespace LocalAIApp
             fileMenu.DropDownItems.Add(CreateItem("Nouvelle conversation", "Ctrl+N", (s, e) => NewConversationClicked?.Invoke(this, e)));
             fileMenu.DropDownItems.Add(CreateItem("Ouvrir dossier conversations", null, (s, e) => OpenFolderClicked?.Invoke(this, e)));
             fileMenu.DropDownItems.Add(CreateItem("Definir dossier modeles...", null, (s, e) => SetModelsFolderClicked?.Invoke(this, e)));
+            fileMenu.DropDownItems.Add(CreateItem("Actualiser les modèles", null, (s, e) => RefreshModelsClicked?.Invoke(this, e)));
             fileMenu.DropDownItems.Add(CreateItem("Rechercher les modèles (rapide)", null, (s, e) => SearchKnownModelsClicked?.Invoke(this, e)));
             fileMenu.DropDownItems.Add(CreateItem("Rechercher les modèles sur tout le PC…", null, (s, e) => SearchAllModelsClicked?.Invoke(this, e)));
             fileMenu.DropDownItems.Add(CreateItem("Annuler la recherche des modèles", null, (s, e) => CancelModelSearchClicked?.Invoke(this, e)));
