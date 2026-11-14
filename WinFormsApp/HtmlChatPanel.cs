@@ -29,6 +29,8 @@ public sealed class ChatPanel : DoubleBufferedPanel
     private bool _documentReady;
     private bool _closing;
 
+    public event Action<int>? EditMessageRequested;
+
     public ChatPanel()
     {
         BackColor = Color.White;
@@ -118,8 +120,10 @@ public sealed class ChatPanel : DoubleBufferedPanel
             _isStreaming = false;
             _streamIsThinking = false;
             _pendingThinkingMarkup.Clear();
-            foreach (var message in messages ?? Enumerable.Empty<Message>())
+            var conversationMessages = (messages ?? Enumerable.Empty<Message>()).ToList();
+            for (var index = 0; index < conversationMessages.Count; index++)
             {
+                var message = conversationMessages[index];
                 var isUser = string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase);
                 var parsed = ParseThinking(message.Content ?? "");
                 _entries.Add(new ChatEntry
@@ -128,14 +132,15 @@ public sealed class ChatPanel : DoubleBufferedPanel
                     Sender = isUser ? "Vous" : "Assistant",
                     Time = (message.Timestamp == default ? DateTime.Now : message.Timestamp).ToString("HH:mm"),
                     Thinking = parsed.Thinking,
-                    Content = parsed.Response
+                    Content = parsed.Response,
+                    ConversationIndex = index
                 });
             }
             RenderAll(forceBottom: true);
         });
     }
 
-    public void AddMessage(string sender, string content, bool isUser)
+    public void AddMessage(string sender, string content, bool isUser, int conversationIndex = -1)
     {
         RunOnUi(() =>
         {
@@ -149,7 +154,8 @@ public sealed class ChatPanel : DoubleBufferedPanel
                 Sender = isUser ? "Vous" : (string.IsNullOrWhiteSpace(sender) ? "Assistant" : sender.Trim().TrimEnd(':')),
                 Time = DateTime.Now.ToString("HH:mm"),
                 Thinking = parsed.Thinking,
-                Content = parsed.Response
+                Content = parsed.Response,
+                ConversationIndex = conversationIndex
             });
             if (isUser)
                 _activity = "";
@@ -382,6 +388,13 @@ public sealed class ChatPanel : DoubleBufferedPanel
                 case "download":
                     SaveCodeFile((string?)request["filename"] ?? "script.txt", text);
                     break;
+                case "editMessage":
+                {
+                    var conversationIndex = (int?)request["conversationIndex"];
+                    if (conversationIndex is >= 0)
+                        EditMessageRequested?.Invoke(conversationIndex.Value);
+                    break;
+                }
                 case "openLink":
                     var uri = (string?)request["url"] ?? "";
                     if (Uri.TryCreate(uri, UriKind.Absolute, out var parsedUri) &&
@@ -627,6 +640,7 @@ public sealed class ChatPanel : DoubleBufferedPanel
         public string Thinking { get; set; } = "";
         public string SystemKind { get; set; } = "info";
         public bool IsStreaming { get; set; }
+        public int ConversationIndex { get; set; } = -1;
 
         public object ToViewModel() => new
         {
@@ -636,7 +650,8 @@ public sealed class ChatPanel : DoubleBufferedPanel
             content = Content,
             thinking = Thinking,
             systemKind = SystemKind,
-            streaming = IsStreaming
+            streaming = IsStreaming,
+            conversationIndex = ConversationIndex
         };
     }
 }

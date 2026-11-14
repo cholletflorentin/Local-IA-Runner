@@ -42,6 +42,7 @@ namespace LocalAIApp
         private string _currentConversationTitle = "";
         private bool _currentConversationTitleGenerated = false;
         private bool _conversationTitleRequestPending = false;
+        private int? _editingMessageIndex;
         private readonly Dictionary<string, string> _pendingConversationTitleFiles = new(StringComparer.Ordinal);
         private readonly StringBuilder _streamingConversationTitle = new();
         private string _streamingConversationTitleId = "";
@@ -155,11 +156,13 @@ namespace LocalAIApp
             chatLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 180F));
 
             _chatPanel = new ChatPanel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8) };
+            _chatPanel.EditMessageRequested += OnEditMessageRequested;
             chatLayout.Controls.Add(_chatPanel, 0, 0);
 
             _inputPanel = new InputPanel { Dock = DockStyle.Fill, Margin = new Padding(0) };
             _inputPanel.SendClicked += OnSendMessage;
             _inputPanel.CancelClicked += OnCancelGeneration;
+            _inputPanel.MessageEditCancelled += OnMessageEditCancelled;
             chatLayout.Controls.Add(_inputPanel, 0, 1);
 
             var chatSurface = new RoundedPanel { BackColor = ThemeColors.Surface, Padding = new Padding(0), Dock = DockStyle.Fill };
@@ -823,6 +826,7 @@ namespace LocalAIApp
 
             if (modelChanged)
             {
+                CancelMessageEdit(restoreDraft: true);
                 // Save the old conversation with its old model, then start a
                 // clean history/file for the newly selected model.
                 if (_currentConversation.Count > 0)
@@ -1370,6 +1374,36 @@ namespace LocalAIApp
         private string[] GetAvailableSubagentModelPaths() =>
             GetAvailableLocalModelPaths().Take(64).ToArray();
 
+        private void OnEditMessageRequested(int conversationIndex)
+        {
+            if (_isGenerating || _imageGenerationActive)
+            {
+                _chatPanel.AddSystemMessage("Attendez la fin de la génération avant de modifier un message.", MessageType.Info);
+                return;
+            }
+            if (conversationIndex < 0 || conversationIndex >= _currentConversation.Count ||
+                !string.Equals(_currentConversation[conversationIndex].Role, "user", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            _editingMessageIndex = conversationIndex;
+            _inputPanel.BeginMessageEdit(_currentConversation[conversationIndex].Content ?? "");
+            _statusBar.SetStatus("Modification du message : renvoyez-le pour reprendre le contexte à cet endroit.", StatusType.Info);
+        }
+
+        private void OnMessageEditCancelled(object sender, EventArgs e)
+        {
+            _editingMessageIndex = null;
+            _statusBar.SetStatus("Modification annulée", StatusType.Info);
+        }
+
+        private void CancelMessageEdit(bool restoreDraft)
+        {
+            if (_editingMessageIndex == null)
+                return;
+            _editingMessageIndex = null;
+            _inputPanel.EndMessageEdit(restoreDraft);
+        }
+
         private void OnSendMessage(object sender, EventArgs e)
         {
             if (_imageGenerationActive)
@@ -1392,8 +1426,33 @@ namespace LocalAIApp
             var text = _inputPanel.GetInputText();
             if (string.IsNullOrWhiteSpace(text)) return;
 
-            _chatPanel.AddMessage("Vous :", text, true);
-            _currentConversation.Add(new Message { Role = "user", Content = text, Timestamp = DateTime.Now });
+            if (_editingMessageIndex is int editIndex)
+            {
+                if (editIndex < 0 || editIndex >= _currentConversation.Count ||
+                    !string.Equals(_currentConversation[editIndex].Role, "user", StringComparison.OrdinalIgnoreCase))
+                {
+                    CancelMessageEdit(restoreDraft: false);
+                    _statusBar.SetStatus("Ce message ne peut plus être modifié.", StatusType.Warning);
+                    return;
+                }
+
+                _currentConversation[editIndex].Content = text;
+                _currentConversation[editIndex].Timestamp = DateTime.Now;
+                if (editIndex < _currentConversation.Count - 1)
+                    _currentConversation.RemoveRange(editIndex + 1, _currentConversation.Count - editIndex - 1);
+                if (editIndex == 0)
+                {
+                    ClearPendingConversationTitleRequests();
+                    ResetCurrentConversationTitle();
+                }
+                _editingMessageIndex = null;
+                _inputPanel.EndMessageEdit(restoreDraft: false);
+            }
+            else
+            {
+                _currentConversation.Add(new Message { Role = "user", Content = text, Timestamp = DateTime.Now });
+            }
+            _chatPanel.RenderMessages(_currentConversation);
             _inputPanel.ClearInput();
 
             // Create the conversation file as soon as its first prompt is sent.
@@ -1623,6 +1682,7 @@ namespace LocalAIApp
             if (_currentConversation.Count > 0 &&
                 !string.Equals(Path.GetFullPath(file), Path.GetFullPath(_currentConversationFile), StringComparison.OrdinalIgnoreCase))
                 SaveConversation();
+            CancelMessageEdit(restoreDraft: true);
             LoadConversation(file);
         }
 
@@ -1635,6 +1695,7 @@ namespace LocalAIApp
             }
             if (_currentConversation.Count > 0)
                 SaveConversation();
+            CancelMessageEdit(restoreDraft: true);
             _currentConversation.Clear();
             ResetCurrentConversationTitle();
             _currentConversationFile = CreateNewConversationPath();
@@ -1653,6 +1714,7 @@ namespace LocalAIApp
                     File.Delete(file);
                     if (string.Equals(Path.GetFullPath(file), Path.GetFullPath(_currentConversationFile), StringComparison.OrdinalIgnoreCase))
                     {
+                        CancelMessageEdit(restoreDraft: true);
                         _currentConversation.Clear();
                         ResetCurrentConversationTitle();
                         _currentConversationFile = CreateNewConversationPath();
@@ -2209,6 +2271,7 @@ namespace LocalAIApp
         {
             try
             {
+                CancelMessageEdit(restoreDraft: true);
                 var json = File.ReadAllText(file);
                 var data = JsonConvert.DeserializeObject<ConversationData>(json);
                 if (data != null)
@@ -2852,16 +2915,21 @@ namespace LocalAIApp
 
     public class InputPanel : DoubleBufferedPanel
     {
-        public event EventHandler SendClicked;
-        public event EventHandler CancelClicked;
+        public event EventHandler? SendClicked;
+        public event EventHandler? CancelClicked;
+        public event EventHandler? MessageEditCancelled;
 
         private ModernTextBox _inputBox;
         private ModernButton _sendBtn;
+        private ModernButton _cancelEditBtn;
         private Label _modelLabel;
+        private string _normalModelLabel = "Aucun modèle sélectionné";
+        private string _draftBeforeMessageEdit = "";
         private bool _ready = false;
         private bool _modelSelected = false;
         private bool _isGenerating = false;
         private bool _isCancelling = false;
+        private bool _isEditingMessage;
 
         public InputPanel()
         {
@@ -2902,13 +2970,14 @@ namespace LocalAIApp
             var footer = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 1,
+                ColumnCount = 2,
                 RowCount = 2,
                 BackColor = Color.Transparent,
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None,
                 Padding = Padding.Empty
             };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120F));
             footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 24F));
             footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
@@ -2923,6 +2992,7 @@ namespace LocalAIApp
                 AutoEllipsis = true
             };
             footer.Controls.Add(_modelLabel, 0, 0);
+            footer.SetColumnSpan(_modelLabel, 2);
 
             _sendBtn = new ModernButton
             {
@@ -2937,6 +3007,21 @@ namespace LocalAIApp
                 Height = 46
             };
             footer.Controls.Add(_sendBtn, 0, 1);
+            footer.SetColumnSpan(_sendBtn, 2);
+            _cancelEditBtn = new ModernButton
+            {
+                Text = "Annuler",
+                Dock = DockStyle.Fill,
+                BackColorNormal = ThemeColors.BorderLight,
+                BackColorHover = ThemeColors.Border,
+                BackColorPressed = ThemeColors.Border,
+                Enabled = true,
+                Visible = false,
+                Margin = new Padding(6, 0, 0, 0),
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                Height = 46
+            };
+            footer.Controls.Add(_cancelEditBtn, 1, 1);
             layout.Controls.Add(footer, 0, 1);
             _sendBtn.Click += (s, e) =>
             {
@@ -2944,6 +3029,15 @@ namespace LocalAIApp
                     CancelClicked?.Invoke(this, EventArgs.Empty);
                 else
                     SendClicked?.Invoke(this, EventArgs.Empty);
+            };
+            _cancelEditBtn.Click += (s, e) => CancelMessageEdit();
+            _inputBox.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Escape && _isEditingMessage)
+                {
+                    e.SuppressKeyPress = true;
+                    CancelMessageEdit();
+                }
             };
 
             Controls.Add(layout);
@@ -2960,19 +3054,69 @@ namespace LocalAIApp
             _modelSelected = selected;
             if (selected)
             {
-                _modelLabel.Text = "[MODELE] " + modelName;
-                _modelLabel.ForeColor = ThemeColors.Success;
+                _normalModelLabel = "[MODELE] " + modelName;
             }
             else
             {
-                _modelLabel.Text = "Aucun modele selectionne";
-                _modelLabel.ForeColor = ThemeColors.TextMuted;
+                _normalModelLabel = "Aucun modele selectionne";
             }
+            UpdateModelLabel();
             UpdateInteractionState();
         }
 
         public string GetInputText() => _inputBox.Text.Trim();
         public void ClearInput() => _inputBox.Clear();
+
+        public void BeginMessageEdit(string content)
+        {
+            if (!_isEditingMessage)
+                _draftBeforeMessageEdit = _inputBox.Text;
+            _isEditingMessage = true;
+            _inputBox.Text = content ?? "";
+            _inputBox.SelectionStart = _inputBox.TextLength;
+            _inputBox.Focus();
+            _cancelEditBtn.Visible = true;
+            if (_sendBtn.Parent is TableLayoutPanel footer)
+            {
+                footer.SetColumnSpan(_sendBtn, 1);
+                footer.PerformLayout();
+            }
+            UpdateModelLabel();
+            UpdateInteractionState();
+        }
+
+        public void EndMessageEdit(bool restoreDraft)
+        {
+            if (!_isEditingMessage)
+                return;
+            if (restoreDraft)
+                _inputBox.Text = _draftBeforeMessageEdit;
+            _draftBeforeMessageEdit = "";
+            _isEditingMessage = false;
+            _cancelEditBtn.Visible = false;
+            if (_sendBtn.Parent is TableLayoutPanel footer)
+                footer.SetColumnSpan(_sendBtn, 2);
+            UpdateModelLabel();
+            UpdateInteractionState();
+        }
+
+        private void CancelMessageEdit()
+        {
+            if (!_isEditingMessage)
+                return;
+            EndMessageEdit(restoreDraft: true);
+            MessageEditCancelled?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void UpdateModelLabel()
+        {
+            _modelLabel.Text = _isEditingMessage
+                ? "Modification d’un message — la suite sera remplacée · Échap pour annuler"
+                : _normalModelLabel;
+            _modelLabel.ForeColor = _isEditingMessage
+                ? ThemeColors.Primary
+                : _modelSelected ? ThemeColors.Success : ThemeColors.TextMuted;
+        }
 
         public void SetGenerating(bool generating)
         {
@@ -2992,7 +3136,7 @@ namespace LocalAIApp
         {
             _sendBtn.Enabled = _ready && _modelSelected && !_isCancelling;
             _inputBox.Enabled = _ready && !_isGenerating;
-            _sendBtn.Text = _isCancelling ? "Arrêt…" : _isGenerating ? "Annuler" : "Envoyer";
+            _sendBtn.Text = _isCancelling ? "Arrêt…" : _isGenerating ? "Annuler" : _isEditingMessage ? "Renvoyer" : "Envoyer";
         }
 
         public void UpdateTheme()
