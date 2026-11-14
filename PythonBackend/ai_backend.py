@@ -1434,7 +1434,7 @@ class LlamaCppBackend:
         resolved_model_path = str(model_file.resolve())
         thread_count = max(1, int(threads or self.cpu_threads))
         gpu_layers = int(ngl)
-        context_size = max(512, int(context_size))
+        context_size = max(128, int(context_size))
         use_mmap = bool(use_mmap)
         config = (resolved_model_path, gpu_layers, thread_count, context_size, use_mmap)
 
@@ -1532,7 +1532,8 @@ class LlamaCppBackend:
                  default_image_model_path=None, generation_timeout_seconds=900,
                  code_execution_timeout_seconds=30, generated_images_directory=None,
                  enable_forum=False, enable_subagents=False,
-                 available_subagent_models=None, available_local_models=None):
+                 available_subagent_models=None, available_local_models=None,
+                 ultra_lite=False):
         """Generate through the persistent server; weights stay loaded between turns."""
         try:
             try:
@@ -1549,11 +1550,19 @@ class LlamaCppBackend:
                 )
 
             prompt = str(prompt or "")
-            goal_prefix = re.match(r"^\s*goal\s*:\s*", prompt, flags=re.IGNORECASE)
+            ultra_lite = bool(ultra_lite)
+            goal_prefix = None if ultra_lite else re.match(r"^\s*goal\s*:\s*", prompt, flags=re.IGNORECASE)
             if goal_prefix:
                 prompt = prompt[goal_prefix.end():]
             # Goal mode is explicit unless the controller actually starts a sub-agent.
             goal_mode = bool(goal_prefix)
+            if ultra_lite:
+                # Keep saved prompts and tool settings untouched, but never pass them
+                # to the model (including system messages supplied by other clients).
+                history = [
+                    message for message in (history or [])
+                    if isinstance(message, dict) and message.get("role") in ("user", "assistant")
+                ]
             available_subagent_models = self._validated_subagent_models(available_subagent_models)
             available_local_models = self._validated_subagent_models(
                 available_local_models if available_local_models is not None else available_subagent_models
@@ -1604,7 +1613,7 @@ class LlamaCppBackend:
                 "frequency_penalty": float(frequency_penalty),
                 "seed": int(seed),
                 "stop": stop or [],
-                "context_size": max(512, int(context_size)),
+                "context_size": max(128, int(context_size)),
                 "ngl": int(ngl),
                 "threads": max(1, int(threads or self.cpu_threads)),
                 "reasoning_effort": self._normalize_reasoning_effort(reasoning_effort)
@@ -1613,7 +1622,7 @@ class LlamaCppBackend:
             # On a new conversation, stream its title first through the same
             # already-loaded server. Only start the assistant response after
             # the final title has been delivered to the UI and saved.
-            if stream and generate_title and conversation_id:
+            if not ultra_lite and stream and generate_title and conversation_id:
                 title_completed = self._stream_conversation_title(
                     conversation_id,
                     title_messages or [{"role": "user", "content": prompt}],
@@ -1626,6 +1635,16 @@ class LlamaCppBackend:
                         "cancelled": True
                     })
                     return
+
+            if ultra_lite:
+                # Send only the conversation and current user prompt. This also
+                # bypasses tool execution and every generated tool instruction.
+                if stream:
+                    self.send({"type": "stream_start"})
+                    self._stream_generate(prompt, history)
+                else:
+                    self._generate_sync(prompt, history)
+                return
 
             image_model_path = str(default_image_model_path or "").strip()
             enable_image_generation = bool(image_model_path and Path(image_model_path).is_file())
@@ -4268,6 +4287,7 @@ def main():
                 enable_subagents = request.get("enable_subagents", False)
                 available_subagent_models = request.get("available_subagent_models", [])
                 available_local_models = request.get("available_local_models", available_subagent_models)
+                ultra_lite = request.get("ultra_lite", False)
 
                 if not backend.begin_generation():
                     backend.send({"type": "error", "content": "Une generation est deja en cours."})
@@ -4286,7 +4306,7 @@ def main():
                               reasoning_effort, use_mmap, default_image_model_path,
                               generation_timeout_seconds, code_execution_timeout_seconds,
                               generated_images_directory, enable_forum, enable_subagents,
-                              available_subagent_models, available_local_models),
+                              available_subagent_models, available_local_models, ultra_lite),
                         daemon=False  # Non-daemon so we can wait
                     )
                     t.start()

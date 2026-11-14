@@ -1479,7 +1479,7 @@ namespace LocalAIApp
             {
                 // Build history with system prompt
                 var history = new List<object>();
-                if (!string.IsNullOrWhiteSpace(_appSettings.SystemPrompt))
+                if (!_appSettings.UltraLiteMode && !string.IsNullOrWhiteSpace(_appSettings.SystemPrompt))
                 {
                     history.Add(new { role = "system", content = _appSettings.SystemPrompt });
                 }
@@ -1490,7 +1490,8 @@ namespace LocalAIApp
                     .Select(m => new { role = m.Role, content = m.Content }));
 
                 var firstUserMessage = _currentConversation.FirstOrDefault(message => message.Role == "user");
-                shouldGenerateConversationTitle = !_currentConversationTitleGenerated &&
+                shouldGenerateConversationTitle = !_appSettings.UltraLiteMode &&
+                    !_currentConversationTitleGenerated &&
                     !_conversationTitleRequestPending &&
                     firstUserMessage != null &&
                     File.Exists(_currentConversationFile);
@@ -1510,7 +1511,7 @@ namespace LocalAIApp
                     conversation_id = shouldGenerateConversationTitle ? conversationId : null,
                     generate_title = shouldGenerateConversationTitle,
                     title_messages = titleMessages,
-                    conversation_title_prompt = _appSettings.ConversationTitlePrompt,
+                    conversation_title_prompt = _appSettings.UltraLiteMode ? null : _appSettings.ConversationTitlePrompt,
                     prompt = text, 
                     history = history.ToArray(),
                     stream = true,
@@ -1534,14 +1535,15 @@ namespace LocalAIApp
                     threads = _appSettings.Threads > 0 ? _appSettings.Threads : Environment.ProcessorCount,
                     use_mmap = _appSettings.UseMmapForModel,
                     reasoning_effort = _appSettings.ReasoningEffort,
-                    enable_web_access = _appSettings.EnableWebAccess,
-                    enable_code_execution = _appSettings.EnableCodeExecution,
-                    enable_forum = _appSettings.EnableForum,
-                    enable_subagents = _appSettings.EnableSubagents,
-                    available_local_models = GetAvailableLocalModelPaths(),
-                    available_subagent_models = GetAvailableSubagentModelPaths(),
-                    code_workspace = _appSettings.CodeWorkspace,
-                    default_image_model_path = _appSettings.DefaultImageModelPath,
+                    ultra_lite = _appSettings.UltraLiteMode,
+                    enable_web_access = !_appSettings.UltraLiteMode && _appSettings.EnableWebAccess,
+                    enable_code_execution = !_appSettings.UltraLiteMode && _appSettings.EnableCodeExecution,
+                    enable_forum = !_appSettings.UltraLiteMode && _appSettings.EnableForum,
+                    enable_subagents = !_appSettings.UltraLiteMode && _appSettings.EnableSubagents,
+                    available_local_models = _appSettings.UltraLiteMode ? Array.Empty<string>() : GetAvailableLocalModelPaths(),
+                    available_subagent_models = _appSettings.UltraLiteMode ? Array.Empty<string>() : GetAvailableSubagentModelPaths(),
+                    code_workspace = _appSettings.UltraLiteMode ? "" : _appSettings.CodeWorkspace,
+                    default_image_model_path = _appSettings.UltraLiteMode ? "" : _appSettings.DefaultImageModelPath,
                     generation_timeout_seconds = _appSettings.GenerationTimeoutSeconds,
                     code_execution_timeout_seconds = _appSettings.CodeExecutionTimeoutSeconds,
                     generated_images_directory = ImageGeneratorForm.GetConfiguredOutputDirectory()
@@ -2426,6 +2428,7 @@ namespace LocalAIApp
         public string ConversationTitlePrompt { get; set; } = DefaultConversationTitlePrompt;
         public string DefaultTextModelPath { get; set; } = "";
         public string DefaultImageModelPath { get; set; } = "";
+        public bool UltraLiteMode { get; set; } = false;
         public bool EnableWebAccess { get; set; } = true;
         public bool EnableCodeExecution { get; set; } = false;
         public bool EnableForum { get; set; } = false;
@@ -3952,6 +3955,7 @@ namespace LocalAIApp
     public class SettingsForm : Form
     {
         public AppSettings Settings { get; private set; }
+        private CheckBox _ultraLiteModeCheckBox = null!;
         private ModernTextBox _systemPromptTextBox;
         private ModernTextBox _conversationTitlePromptTextBox = null!;
         private ModernTextBox _defaultTextModelPathTextBox = null!;
@@ -3993,6 +3997,7 @@ namespace LocalAIApp
                 ConversationTitlePrompt = currentSettings.ConversationTitlePrompt ?? AppSettings.DefaultConversationTitlePrompt,
                 DefaultTextModelPath = currentSettings.DefaultTextModelPath ?? "",
                 DefaultImageModelPath = currentSettings.DefaultImageModelPath ?? "",
+                UltraLiteMode = currentSettings.UltraLiteMode,
                 SearchAllDrivesForModels = currentSettings.SearchAllDrivesForModels,
                 EnableWebAccess = currentSettings.EnableWebAccess,
                 EnableCodeExecution = currentSettings.EnableCodeExecution,
@@ -4120,6 +4125,19 @@ namespace LocalAIApp
                 _autoUpdateCheckBox));
 
             AddSection(content, "INSTRUCTIONS ET MÉMOIRE");
+            _ultraLiteModeCheckBox = new CheckBox
+            {
+                Text = "Activé",
+                AutoSize = true,
+                ForeColor = ThemeColors.TextPrimary,
+                BackColor = ThemeColors.Surface,
+                FlatStyle = FlatStyle.Flat
+            };
+            content.Controls.Add(CreateSettingCard(
+                "Mode ultra léger",
+                "Désactivé par défaut. Pour les contextes très courts (par exemple 128 tokens), envoie au modèle uniquement les messages de la conversation et la demande actuelle. Le prompt système, le prompt de nommage et les consignes d’outils ne sont pas envoyés; les outils et le nommage automatique sont désactivés pendant la requête. Tous ces réglages restent enregistrés et reprennent effet lorsque ce mode est désactivé.",
+                _ultraLiteModeCheckBox));
+
             _conversationTitlePromptTextBox = new ModernTextBox
             {
                 Multiline = true,
@@ -4260,10 +4278,10 @@ namespace LocalAIApp
                 "Plafond du temps accordé à chaque script Python. Le modèle peut demander moins, mais ne peut pas dépasser cette valeur. Valeur par défaut : 30 secondes.",
                 _codeExecutionTimeoutUpDown));
 
-            _contextSizeUpDown = CreateNumericControl(512, 131072, 512, 0, 150);
+            _contextSizeUpDown = CreateNumericControl(128, 131072, 128, 0, 150);
             content.Controls.Add(CreateSettingCard(
                 "Taille du contexte",
-                "Nombre maximal de tokens que le modèle peut prendre en compte. Une grande valeur utilise plus de mémoire.",
+                "Nombre maximal de tokens que le modèle peut prendre en compte. Les très petites valeurs sont prévues pour le mode ultra léger; une grande valeur utilise plus de mémoire.",
                 _contextSizeUpDown));
 
             AddSection(content, "CHOIX DES MOTS");
@@ -4569,6 +4587,7 @@ namespace LocalAIApp
 
         private void LoadSettings()
         {
+            _ultraLiteModeCheckBox.Checked = Settings.UltraLiteMode;
             _conversationTitlePromptTextBox.Text = Settings.ConversationTitlePrompt ?? AppSettings.DefaultConversationTitlePrompt;
             _systemPromptTextBox.Text = Settings.SystemPrompt ?? "";
             _defaultTextModelPathTextBox.Text = Settings.DefaultTextModelPath ?? "";
@@ -4605,6 +4624,7 @@ namespace LocalAIApp
 
         private void SaveSettings()
         {
+            Settings.UltraLiteMode = _ultraLiteModeCheckBox.Checked;
             Settings.ConversationTitlePrompt = _conversationTitlePromptTextBox.Text;
             Settings.SystemPrompt = _systemPromptTextBox.Text;
             Settings.DefaultTextModelPath = _defaultTextModelPathTextBox.Text.Trim();
