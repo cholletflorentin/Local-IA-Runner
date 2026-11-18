@@ -516,7 +516,7 @@ namespace LocalAIApp
                             if (skippedMmprojCount > 0)
                             {
                                 _chatPanel.AddSystemMessage(
-                                    $"{skippedMmprojCount} fichier(s) mmproj ignoré(s) : ce sont des projecteurs multimodaux, pas des modèles principaux. Le backend actuel ne prend pas encore en charge leur chargement.",
+                                    $"{skippedMmprojCount} projecteur(s) mmproj détecté(s). Ils ne sont pas sélectionnables seuls et seront associés automatiquement au modèle GGUF du même dossier lorsqu'une correspondance unique est trouvée.",
                                     MessageType.Info);
                             }
                         }
@@ -802,9 +802,9 @@ namespace LocalAIApp
 
             if (IsMmprojFile(modelPath))
             {
-                _statusBar.SetStatus("Projecteur multimodal non pris en charge", StatusType.Warning);
+                _statusBar.SetStatus("Choisissez le modèle GGUF principal", StatusType.Warning);
                 _chatPanel.AddSystemMessage(
-                    "Ce fichier mmproj est un projecteur multimodal auxiliaire; il ne peut pas être chargé seul comme modèle. Choisissez le fichier GGUF principal.",
+                    "Un fichier mmproj est un projecteur multimodal auxiliaire et ne se charge pas seul. Choisissez le GGUF principal du même dossier; son projecteur sera associé automatiquement.",
                     MessageType.Warning);
                 if (!string.IsNullOrEmpty(_selectedModelPath))
                     _sidebarPanel.SelectModel(_selectedModelPath);

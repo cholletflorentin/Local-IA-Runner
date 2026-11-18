@@ -1411,6 +1411,51 @@ class LlamaCppBackend:
                     if self._sd_active_job_id == job_id:
                         self._sd_active_job_id = None
 
+    @staticmethod
+    def _find_mmproj_for_model(model_file):
+        """Find a local multimodal projector paired with a GGUF model."""
+        try:
+            candidates = sorted(
+                (path.resolve() for path in model_file.parent.iterdir()
+                 if path.is_file() and path.suffix.casefold() == ".gguf"
+                 and "mmproj" in path.stem.casefold()),
+                key=lambda path: path.name.casefold()
+            )
+        except OSError:
+            return None, False
+        if not candidates:
+            return None, False
+        if len(candidates) == 1:
+            return str(candidates[0]), False
+
+        def tokens(stem):
+            stem = re.sub(r"(?i)^mmproj[._ -]*", "", stem)
+            stem = re.sub(
+                r"(?i)[._ -]+(?:q[2-8](?:_[a-z0-9]+)*|iq[1-4](?:_[a-z0-9]+)*|"
+                r"f16|f32|bf16|fp16|fp32)(?:[._ -].*)?$",
+                "",
+                stem
+            )
+            ignored = {"model", "mmproj", "instruct", "chat", "gguf"}
+            return {
+                token for token in re.findall(r"[a-z]+\d*|\d+[a-z]*", stem.casefold())
+                if token not in ignored
+            }
+
+        model_tokens = tokens(model_file.stem)
+        ranked = []
+        for path in candidates:
+            projector_tokens = tokens(path.stem)
+            overlap = model_tokens & projector_tokens
+            score = len(overlap) / max(1, len(model_tokens))
+            ranked.append((score, len(overlap), path))
+        ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        best = ranked[0]
+        if (best[1] >= 2 and best[0] >= 0.5
+                and (len(ranked) == 1 or best[:2] != ranked[1][:2])):
+            return str(best[2]), False
+        return None, True
+
     def load_model(self, model_path, ngl=99, threads=None, context_size=4096, use_mmap=False):
         """Start or reuse a server with the requested model already loaded."""
         model_file = Path(model_path)
@@ -1427,17 +1472,18 @@ class LlamaCppBackend:
                 "type": "error",
                 "content": (
                     "Ce fichier mmproj est un projecteur multimodal auxiliaire, pas un modèle principal. "
-                    "Le backend actuel ne prend pas en charge le chargement conjoint d'un modèle et de son mmproj."
+                    "Sélectionnez le fichier GGUF principal; le projecteur mmproj du même dossier sera chargé automatiquement."
                 )
             })
             return False
 
         resolved_model_path = str(model_file.resolve())
+        mmproj_path, ambiguous_mmproj = self._find_mmproj_for_model(model_file)
         thread_count = max(1, int(threads or self.cpu_threads))
         gpu_layers = int(ngl)
         context_size = max(128, int(context_size))
         use_mmap = bool(use_mmap)
-        config = (resolved_model_path, gpu_layers, thread_count, context_size, use_mmap)
+        config = (resolved_model_path, mmproj_path, gpu_layers, thread_count, context_size, use_mmap)
 
         # The text and diffusion engines share system memory and the GPU. Keep
         # only the engine selected by the most recent generation mode loaded.
@@ -1473,8 +1519,21 @@ class LlamaCppBackend:
                 "--load-mode", "mmap" if use_mmap else "none",
                 "--no-webui"
             ]
+            if mmproj_path:
+                command.extend(["--mmproj", mmproj_path])
 
-            self.send({"type": "model_loading", "content": f"Chargement du modèle en mémoire: {model_file.name}"})
+            loading_message = f"Chargement du modèle en mémoire: {model_file.name}"
+            if mmproj_path:
+                loading_message += f" avec son projecteur multimodal {Path(mmproj_path).name}"
+            elif ambiguous_mmproj:
+                self.send({
+                    "type": "debug",
+                    "content": (
+                        f"Plusieurs fichiers mmproj sont présents dans {model_file.parent}, "
+                        "mais aucun ne correspond clairement au modèle; aucun projecteur n'a été chargé."
+                    )
+                })
+            self.send({"type": "model_loading", "content": loading_message})
             try:
                 creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if self.is_windows else 0
                 with open(log_path, "ab") as server_log:
