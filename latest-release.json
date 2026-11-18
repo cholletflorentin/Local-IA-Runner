@@ -1,19 +1,19 @@
 {
-  "tag_name": "v1.0.43",
-  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.43",
-  "body": "## Nouveautés de Local IA Runner 1.0.43\r\n\r\n### Ajouter le mode sombre dans les paramètres\n\n- Ajoute une préférence persistante, désactivée par défaut, pour la palette sombre.\r\n- Applique le thème au chat, aux panneaux, aux paramètres, au forum et au générateur d'images.\r\n- Synchronise les couleurs de l'affichage HTML du chat avec le thème choisi.\r\n\r\n## Téléchargements\r\n\r\n- LocalIARunner-Setup-x64.exe : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.\r\n- LocalIARunner-Portable-x64-1.0.43.zip : version portable à extraire et lancer.\r\n\r\nLes modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.",
+  "tag_name": "v1.0.44",
+  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.44",
+  "body": "## Nouveautés de Local IA Runner 1.0.44\r\n\r\n### Ajouter les pièces jointes multimodales au chat\n\n- Permet aux modèles dotés d’un projecteur multimodal compatible de recevoir des images, fichiers audio et vidéos.\r\n- Conserve les pièces jointes avec les conversations et affiche les médias avec un aperçu, des lecteurs et un bouton de téléchargement.\r\n- Affiche dans le chat les images créées avec l’outil de génération.\r\n- Prépare FFmpeg à la demande pour le premier envoi vidéo et vérifie l’archive avant installation.\r\n\r\n## Téléchargements\r\n\r\n- LocalIARunner-Setup-x64.exe : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.\r\n- LocalIARunner-Portable-x64-1.0.44.zip : version portable à extraire et lancer.\r\n\r\nLes modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.",
   "assets": [
     {
       "name": "LocalIARunner-Setup-x64.exe",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.43/LocalIARunner-Setup-x64.exe",
-      "digest": "sha256:6ab97dd5cf72e9663167266a80764d81f66019c7abbcae5b6bba47e673d1d6ee",
-      "size": 97445096
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.44/LocalIARunner-Setup-x64.exe",
+      "digest": "sha256:5df07239d06a86f8745b3ab8614b7dd7316f253ae5433948de0085eb751a9e55",
+      "size": 97452422
     },
     {
-      "name": "LocalIARunner-Portable-x64-1.0.43.zip",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.43/LocalIARunner-Portable-x64-1.0.43.zip",
-      "digest": "sha256:36dfdf65c230db959da23159729982a955e18283f2d24fe8d28cebfe4cd94c42",
-      "size": 140866219
+      "name": "LocalIARunner-Portable-x64-1.0.44.zip",
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.44/LocalIARunner-Portable-x64-1.0.44.zip",
+      "digest": "sha256:b7c6a6c72654a6b43c99aaba4e10d05cffe5b0093034679f93def761a366ea94",
+      "size": 140875739
     }
   ]
 }
