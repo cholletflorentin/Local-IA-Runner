@@ -2765,14 +2765,71 @@ class LlamaCppBackend:
         if function_calls is not None:
             return function_calls
 
+        sequence_calls = LlamaCppBackend._parse_standalone_tool_call_sequence(text)
+        if sequence_calls is not None:
+            return sequence_calls
+
         unwrapped, _ = LlamaCppBackend._unwrap_tool_call_envelope(text)
         if unwrapped is None:
             return []
         function_calls = LlamaCppBackend._parse_xml_function_tool_calls(unwrapped)
         if function_calls is not None:
             return function_calls
+        sequence_calls = LlamaCppBackend._parse_standalone_tool_call_sequence(unwrapped)
+        if sequence_calls is not None:
+            return sequence_calls
         call = LlamaCppBackend._parse_tool_call(unwrapped)
         return [call] if call is not None else []
+
+    @staticmethod
+    def _parse_standalone_tool_call_sequence(content):
+        """Parse adjacent standalone tool tags while rejecting surrounding prose."""
+        text = str(content or "").strip()
+        if not text:
+            return None
+
+        if text[:len("<tools>")].lower() == "<tools>":
+            text = text[len("<tools>"):].lstrip()
+
+        calls = []
+        position = 0
+        lowered = text.lower()
+        while position < len(text):
+            while position < len(text) and text[position].isspace():
+                position += 1
+            if position >= len(text):
+                return calls or None
+
+            tag_match = re.match(
+                r"<([a-z_][a-z0-9_]*)(?=\s|>)", text[position:], flags=re.IGNORECASE
+            )
+            if tag_match is None:
+                suffix = text[position:]
+                return calls if calls and LlamaCppBackend._tool_envelope_suffix_is_complete(suffix) else None
+
+            tool_name = tag_match.group(1).lower()
+            if tool_name not in SUPPORTED_TOOL_NAMES and tool_name != "tool_call":
+                return None
+
+            closing_tag = f"</{tool_name}>"
+            closing_position = lowered.find(closing_tag, position + tag_match.end())
+            parsed_call = None
+            call_end = -1
+            while closing_position >= 0:
+                candidate_end = closing_position + len(closing_tag)
+                candidate = text[position:candidate_end]
+                parsed_call = LlamaCppBackend._parse_plain_tool_call(candidate)
+                if parsed_call is not None:
+                    call_end = candidate_end
+                    break
+                closing_position = lowered.find(closing_tag, closing_position + len(closing_tag))
+
+            if parsed_call is None:
+                return None
+            calls.append(parsed_call)
+            position = call_end
+
+        return calls or None
 
     @staticmethod
     def _parse_xml_function_block(block):
@@ -3018,6 +3075,12 @@ class LlamaCppBackend:
         return "invalid"
 
     @staticmethod
+    def _is_tool_call_sequence_suffix(suffix):
+        """Tell whether an invalid response suffix can begin another tool call."""
+        state, _ = LlamaCppBackend._detect_tool_call_start(str(suffix or "").lstrip())
+        return state in ("prefix", "tool", "wrapped")
+
+    @staticmethod
     def _tool_response_boundary_end(suffix):
         match = re.match(r"\s*</response\s*>", str(suffix or ""), flags=re.IGNORECASE)
         return match.end() if match is not None else None
@@ -3168,7 +3231,8 @@ class LlamaCppBackend:
                     if capture_tool_response_boundary(closing_index, closing_tag):
                         return
                     suffix = output_buffer[closing_index + len(closing_tag):]
-                    if self._tool_response_suffix_state(suffix) == "invalid":
+                    if (self._tool_response_suffix_state(suffix) == "invalid"
+                            and not self._is_tool_call_sequence_suffix(suffix)):
                         passthrough = True
                         in_tool_call = False
                         emit(output_buffer)
@@ -3181,7 +3245,8 @@ class LlamaCppBackend:
                     if capture_tool_response_boundary(closing_index, closing_tag):
                         return
                     after_closing_tag = output_buffer[closing_index + len(closing_tag):]
-                    if self._tool_response_suffix_state(after_closing_tag) == "invalid":
+                    if (self._tool_response_suffix_state(after_closing_tag) == "invalid"
+                            and not self._is_tool_call_sequence_suffix(after_closing_tag)):
                         passthrough = True
                         in_tool_call = False
                         emit(output_buffer)
@@ -3212,7 +3277,8 @@ class LlamaCppBackend:
                         if capture_tool_response_boundary(closing_index, closing_tag):
                             return
                         after_closing_tag = output_buffer[closing_index + len(closing_tag):]
-                        if self._tool_response_suffix_state(after_closing_tag) == "invalid":
+                        if (self._tool_response_suffix_state(after_closing_tag) == "invalid"
+                                and not self._is_tool_call_sequence_suffix(after_closing_tag)):
                             passthrough = True
                             in_tool_call = False
                             emit(output_buffer)
