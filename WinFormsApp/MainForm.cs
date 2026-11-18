@@ -852,6 +852,7 @@ namespace LocalAIApp
             
             _statusBar.SetStatus("Modele selectionne: " + modelName, StatusType.Info);
             _inputPanel.SetModelSelected(true, modelName);
+            RequestModelCapabilities(modelPath);
         }
 
         private static string GetModelDisplayName(string modelPath)
@@ -884,6 +885,35 @@ namespace LocalAIApp
             {
                 System.Diagnostics.Debug.WriteLine("[Unload model] " + ex.Message);
             }
+        }
+
+        private void RequestModelCapabilities(string modelPath)
+        {
+            if (!_isPythonReady || string.IsNullOrWhiteSpace(modelPath))
+                return;
+
+            var json = JsonConvert.SerializeObject(new
+            {
+                type = "check_model_capabilities",
+                model_path = modelPath
+            });
+            Task.Run(() =>
+            {
+                try
+                {
+                    lock (_pythonInputLock)
+                    {
+                        if (_pythonInput == null || _pythonProcess == null || _pythonProcess.HasExited)
+                            return;
+                        _pythonInput.WriteLine(json);
+                        _pythonInput.Flush();
+                    }
+                }
+                catch (Exception exception)
+                {
+                    System.Diagnostics.Debug.WriteLine("[Model capabilities] " + exception.Message);
+                }
+            });
         }
 
         private void OnRefreshModels(object sender, EventArgs e)
@@ -1104,6 +1134,8 @@ namespace LocalAIApp
                             _isPythonReady = true;
                             _statusBar.SetStatus("Pret - " + msg.Model, StatusType.Success);
                             _inputPanel.SetReady(true);
+                            if (!string.IsNullOrWhiteSpace(_selectedModelPath))
+                                RequestModelCapabilities(_selectedModelPath);
                             break;
                         case "response":
                             _generationWatchdog?.Dispose();
@@ -1113,8 +1145,15 @@ namespace LocalAIApp
                             _generationTimedOut = false;
                             _inputPanel.SetGenerating(false);
                             var responseContent = msg.Content ?? "";
-                            _chatPanel.AddMessage("Assistant", responseContent, false);
-                            _currentConversation.Add(new Message { Role = "assistant", Content = responseContent, Timestamp = DateTime.Now });
+                            var responseMedia = ImportGeneratedMedia(msg.Media);
+                            _chatPanel.AddMessage("Assistant", responseContent, false, attachments: responseMedia);
+                            _currentConversation.Add(new Message
+                            {
+                                Role = "assistant",
+                                Content = responseContent,
+                                Attachments = responseMedia,
+                                Timestamp = DateTime.Now
+                            });
                             SaveConversation();
                             _statusBar.SetStatus("Pret", StatusType.Success);
                             ApplyPendingUpdateWhenIdle();
@@ -1189,7 +1228,14 @@ namespace LocalAIApp
                                 Log("stream message finalized");
                                 if (!string.IsNullOrWhiteSpace(msg.Content))
                                 {
-                                    _currentConversation.Add(new Message { Role = "assistant", Content = msg.Content, Timestamp = DateTime.Now });
+                                    var streamMedia = ImportGeneratedMedia(msg.Media);
+                                    _currentConversation.Add(new Message
+                                    {
+                                        Role = "assistant",
+                                        Content = msg.Content,
+                                        Attachments = streamMedia,
+                                        Timestamp = DateTime.Now
+                                    });
                                     _chatPanel.RenderMessages(_currentConversation);
                                     SaveConversation();
                                 }
@@ -1251,10 +1297,17 @@ namespace LocalAIApp
                             ApplyPendingUpdateWhenIdle();
                             break;
                         case "model_loading":
+                            MarkGenerationProgress();
                             _statusBar.SetStatus("Chargement: " + msg.Content, StatusType.Info);
                             break;
                         case "model_loaded":
+                            _inputPanel.SetMultimodalSupport(msg.SupportsMultimodal);
                             _statusBar.SetStatus("Modele charge: " + msg.Content, StatusType.Success);
+                            break;
+                        case "model_capabilities":
+                            if (!string.IsNullOrWhiteSpace(msg.ModelPath) &&
+                                string.Equals(Path.GetFullPath(msg.ModelPath), Path.GetFullPath(_selectedModelPath), StringComparison.OrdinalIgnoreCase))
+                                _inputPanel.SetMultimodalSupport(msg.SupportsMultimodal);
                             break;
                         case "image_engine_status":
                             MarkGenerationProgress();
@@ -1392,7 +1445,9 @@ namespace LocalAIApp
                 return;
 
             _editingMessageIndex = conversationIndex;
-            _inputPanel.BeginMessageEdit(_currentConversation[conversationIndex].Content ?? "");
+            _inputPanel.BeginMessageEdit(
+                _currentConversation[conversationIndex].Content ?? "",
+                _currentConversation[conversationIndex].Attachments);
             _statusBar.SetStatus("Modification du message : renvoyez-le pour reprendre le contexte à cet endroit.", StatusType.Info);
         }
 
@@ -1430,7 +1485,10 @@ namespace LocalAIApp
             }
             
             var text = _inputPanel.GetInputText();
-            if (string.IsNullOrWhiteSpace(text)) return;
+            var attachments = _inputPanel.GetAttachments();
+            if (string.IsNullOrWhiteSpace(text) && attachments.Count == 0) return;
+            if (string.IsNullOrWhiteSpace(text))
+                text = attachments.Count == 1 ? "Analyse le fichier joint." : "Analyse les fichiers joints.";
 
             if (_editingMessageIndex is int editIndex)
             {
@@ -1443,6 +1501,7 @@ namespace LocalAIApp
                 }
 
                 _currentConversation[editIndex].Content = text;
+                _currentConversation[editIndex].Attachments = attachments;
                 _currentConversation[editIndex].Timestamp = DateTime.Now;
                 if (editIndex < _currentConversation.Count - 1)
                     _currentConversation.RemoveRange(editIndex + 1, _currentConversation.Count - editIndex - 1);
@@ -1456,7 +1515,13 @@ namespace LocalAIApp
             }
             else
             {
-                _currentConversation.Add(new Message { Role = "user", Content = text, Timestamp = DateTime.Now });
+                _currentConversation.Add(new Message
+                {
+                    Role = "user",
+                    Content = text,
+                    Attachments = attachments,
+                    Timestamp = DateTime.Now
+                });
             }
             _chatPanel.RenderMessages(_currentConversation);
             _inputPanel.ClearInput();
@@ -1493,7 +1558,17 @@ namespace LocalAIApp
                 // The current message is also sent as `prompt`; do not include it twice in history.
                 history.AddRange(_currentConversation
                     .Take(Math.Max(0, _currentConversation.Count - 1))
-                    .Select(m => new { role = m.Role, content = m.Content }));
+                    .Select(m => new
+                    {
+                        role = m.Role,
+                        content = m.Content,
+                        attachments = (m.Attachments ?? new List<ChatAttachment>()).Select(attachment => new
+                        {
+                            kind = attachment.Kind,
+                            path = attachment.Path,
+                            name = attachment.Name
+                        }).ToArray()
+                    }));
 
                 var firstUserMessage = _currentConversation.FirstOrDefault(message => message.Role == "user");
                 shouldGenerateConversationTitle = !_appSettings.UltraLiteMode &&
@@ -1501,8 +1576,12 @@ namespace LocalAIApp
                     !_conversationTitleRequestPending &&
                     firstUserMessage != null &&
                     File.Exists(_currentConversationFile);
+                var firstTitleContext = firstUserMessage?.Content ?? text;
+                if (firstUserMessage?.Attachments is { Count: > 0 } titleAttachments)
+                    firstTitleContext += " [Fichiers joints : " +
+                        string.Join(", ", titleAttachments.Select(attachment => attachment.Name)) + "]";
                 object[] titleMessages = shouldGenerateConversationTitle
-                    ? new object[] { new { role = "user", content = LimitTitleContext(firstUserMessage?.Content ?? text) } }
+                    ? new object[] { new { role = "user", content = LimitTitleContext(firstTitleContext) } }
                     : Array.Empty<object>();
                 if (shouldGenerateConversationTitle)
                 {
@@ -1520,6 +1599,12 @@ namespace LocalAIApp
                     conversation_title_prompt = _appSettings.UltraLiteMode ? null : _appSettings.ConversationTitlePrompt,
                     prompt = text, 
                     history = history.ToArray(),
+                    attachments = attachments.Select(attachment => new
+                    {
+                        kind = attachment.Kind,
+                        path = attachment.Path,
+                        name = attachment.Name
+                    }).ToArray(),
                     stream = true,
                     temperature = _appSettings.Temperature,
                     top_p = _appSettings.TopP,
@@ -1956,6 +2041,32 @@ namespace LocalAIApp
             });
         }
 
+        private static List<ChatAttachment> ImportGeneratedMedia(JArray? media)
+        {
+            var result = new List<ChatAttachment>();
+            if (media == null)
+                return result;
+
+            foreach (var item in media)
+            {
+                try
+                {
+                    var attachment = item.ToObject<ChatAttachment>();
+                    if (attachment == null || string.IsNullOrWhiteSpace(attachment.Path) ||
+                        !File.Exists(attachment.Path))
+                        continue;
+                    if (ChatMediaStorage.GetMediaUrl(attachment.Path) == null)
+                        attachment = ChatMediaStorage.ImportGenerated(attachment.Path);
+                    result.Add(attachment);
+                }
+                catch (Exception exception)
+                {
+                    System.Diagnostics.Debug.WriteLine("Generated media could not be attached to chat: " + exception.Message);
+                }
+            }
+            return result;
+        }
+
         private void SaveConversation()
         {
             try
@@ -2305,6 +2416,7 @@ namespace LocalAIApp
                         _selectedModelName = modelName;
                         _inputPanel.SetModelSelected(true, modelName);
                         _chatPanel.SetModelName(modelName);
+                        RequestModelCapabilities(data.ModelPath);
                     }
                     else
                     {
@@ -2506,6 +2618,7 @@ namespace LocalAIApp
         public string Role { get; set; }
         public string Content { get; set; }
         public DateTime Timestamp { get; set; }
+        public List<ChatAttachment> Attachments { get; set; } = new();
     }
 
     public class ConversationData
@@ -2537,6 +2650,12 @@ namespace LocalAIApp
         public JArray Files { get; set; }
         public JArray Errors { get; set; }
         public JArray Paths { get; set; }
+        [JsonProperty("media")]
+        public JArray Media { get; set; }
+        [JsonProperty("supports_multimodal")]
+        public bool? SupportsMultimodal { get; set; }
+        [JsonProperty("model_path")]
+        public string ModelPath { get; set; } = "";
         public string Stage { get; set; }
         public string Detail { get; set; }
         public string Status { get; set; }
@@ -3048,19 +3167,25 @@ namespace LocalAIApp
 
         private ModernTextBox _inputBox;
         private ModernButton _sendBtn;
+        private ModernButton _attachBtn;
         private ModernButton _cancelEditBtn;
         private Label _modelLabel;
+        private Label _attachmentsLabel;
         private string _normalModelLabel = "Aucun modèle sélectionné";
         private string _draftBeforeMessageEdit = "";
+        private readonly List<ChatAttachment> _attachments = new();
+        private List<ChatAttachment> _draftAttachmentsBeforeMessageEdit = new();
+        private readonly ToolTip _attachmentToolTip = new();
         private bool _ready = false;
         private bool _modelSelected = false;
         private bool _isGenerating = false;
         private bool _isCancelling = false;
         private bool _isEditingMessage;
+        private bool? _supportsMultimodal;
 
         public InputPanel()
         {
-            Height = 180;
+            Height = 210;
             BackColor = ThemeColors.Surface;
             Padding = new Padding(16, 9, 16, 9);
 
@@ -3074,7 +3199,7 @@ namespace LocalAIApp
             };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 94F));
 
             _inputBox = new ModernTextBox
             {
@@ -3097,16 +3222,39 @@ namespace LocalAIApp
             var footer = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 2,
-                RowCount = 2,
+                ColumnCount = 3,
+                RowCount = 3,
                 BackColor = Color.Transparent,
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None,
                 Padding = Padding.Empty
             };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 108F));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120F));
-            footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 24F));
+            footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 21F));
+            footer.RowStyles.Add(new RowStyle(SizeType.Absolute, 21F));
             footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+            _attachmentsLabel = new Label
+            {
+                Dock = DockStyle.Fill,
+                Text = "Aucune pièce jointe",
+                ForeColor = ThemeColors.TextMuted,
+                Font = new Font("Segoe UI", 8.5f),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(4, 0, 0, 0),
+                AutoEllipsis = true,
+                Cursor = Cursors.Hand
+            };
+            _attachmentsLabel.Click += (s, e) => ClearAttachments();
+            _attachmentsLabel.MouseEnter += (s, e) =>
+            {
+                if (_attachments.Count > 0)
+                    _attachmentsLabel.ForeColor = ThemeColors.Primary;
+            };
+            _attachmentsLabel.MouseLeave += (s, e) => UpdateAttachmentLabel();
+            footer.Controls.Add(_attachmentsLabel, 0, 0);
+            footer.SetColumnSpan(_attachmentsLabel, 3);
 
             _modelLabel = new Label
             {
@@ -3118,8 +3266,24 @@ namespace LocalAIApp
                 Padding = new Padding(4, 0, 0, 0),
                 AutoEllipsis = true
             };
-            footer.Controls.Add(_modelLabel, 0, 0);
-            footer.SetColumnSpan(_modelLabel, 2);
+            footer.Controls.Add(_modelLabel, 0, 1);
+            footer.SetColumnSpan(_modelLabel, 3);
+
+            _attachBtn = new ModernButton
+            {
+                Text = "+ Joindre",
+                Dock = DockStyle.Fill,
+                BackColorNormal = ThemeColors.BorderLight,
+                BackColorHover = ThemeColors.Border,
+                BackColorPressed = ThemeColors.Border,
+                Enabled = false,
+                Margin = new Padding(0, 2, 6, 0),
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold)
+            };
+            _attachBtn.Click += (s, e) => ChooseAttachments();
+            footer.Controls.Add(_attachBtn, 0, 2);
+            _attachmentToolTip.SetToolTip(_attachBtn,
+                "Joindre une image, un audio ou une vidéo. Le modèle doit avoir un projecteur multimodal compatible.");
 
             _sendBtn = new ModernButton
             {
@@ -3133,7 +3297,7 @@ namespace LocalAIApp
                 Font = new Font("Segoe UI", 10f, FontStyle.Bold),
                 Height = 46
             };
-            footer.Controls.Add(_sendBtn, 0, 1);
+            footer.Controls.Add(_sendBtn, 1, 2);
             footer.SetColumnSpan(_sendBtn, 2);
             _cancelEditBtn = new ModernButton
             {
@@ -3144,11 +3308,11 @@ namespace LocalAIApp
                 BackColorPressed = ThemeColors.Border,
                 Enabled = true,
                 Visible = false,
-                Margin = new Padding(6, 0, 0, 0),
+                Margin = new Padding(6, 2, 0, 0),
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold),
                 Height = 46
             };
-            footer.Controls.Add(_cancelEditBtn, 1, 1);
+            footer.Controls.Add(_cancelEditBtn, 2, 2);
             layout.Controls.Add(footer, 0, 1);
             _sendBtn.Click += (s, e) =>
             {
@@ -3179,6 +3343,7 @@ namespace LocalAIApp
         public void SetModelSelected(bool selected, string modelName = "")
         {
             _modelSelected = selected;
+            _supportsMultimodal = null;
             if (selected)
             {
                 _normalModelLabel = "[MODELE] " + modelName;
@@ -3188,18 +3353,38 @@ namespace LocalAIApp
                 _normalModelLabel = "Aucun modele selectionne";
             }
             UpdateModelLabel();
+            UpdateAttachmentLabel();
             UpdateInteractionState();
         }
 
         public string GetInputText() => _inputBox.Text.Trim();
-        public void ClearInput() => _inputBox.Clear();
+        public List<ChatAttachment> GetAttachments() => _attachments.ToList();
 
-        public void BeginMessageEdit(string content)
+        public void ClearInput()
+        {
+            _inputBox.Clear();
+            ClearAttachments();
+        }
+
+        public void SetMultimodalSupport(bool? supported)
+        {
+            _supportsMultimodal = supported;
+            UpdateAttachmentLabel();
+            UpdateInteractionState();
+        }
+
+        public void BeginMessageEdit(string content, IEnumerable<ChatAttachment>? attachments = null)
         {
             if (!_isEditingMessage)
+            {
                 _draftBeforeMessageEdit = _inputBox.Text;
+                _draftAttachmentsBeforeMessageEdit = _attachments.ToList();
+            }
             _isEditingMessage = true;
             _inputBox.Text = content ?? "";
+            _attachments.Clear();
+            _attachments.AddRange(attachments ?? Enumerable.Empty<ChatAttachment>());
+            UpdateAttachmentLabel();
             _inputBox.SelectionStart = _inputBox.TextLength;
             _inputBox.Focus();
             _cancelEditBtn.Visible = true;
@@ -3217,14 +3402,87 @@ namespace LocalAIApp
             if (!_isEditingMessage)
                 return;
             if (restoreDraft)
+            {
                 _inputBox.Text = _draftBeforeMessageEdit;
+                _attachments.Clear();
+                _attachments.AddRange(_draftAttachmentsBeforeMessageEdit);
+            }
             _draftBeforeMessageEdit = "";
+            _draftAttachmentsBeforeMessageEdit.Clear();
             _isEditingMessage = false;
+            UpdateAttachmentLabel();
             _cancelEditBtn.Visible = false;
             if (_sendBtn.Parent is TableLayoutPanel footer)
                 footer.SetColumnSpan(_sendBtn, 2);
             UpdateModelLabel();
             UpdateInteractionState();
+        }
+
+        private void ChooseAttachments()
+        {
+            using var dialog = new OpenFileDialog
+            {
+                Title = "Joindre des images, fichiers audio ou vidéos",
+                Filter = "Médias pris en charge|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.mp3;*.wav;*.flac;*.mp4;*.webm;*.mov;*.mkv;*.avi;*.mpeg;*.mpg|Images|*.png;*.jpg;*.jpeg;*.gif;*.bmp|Audio|*.mp3;*.wav;*.flac|Vidéos|*.mp4;*.webm;*.mov;*.mkv;*.avi;*.mpeg;*.mpg|Tous les fichiers|*.*",
+                Multiselect = true,
+                CheckFileExists = true
+            };
+            if (dialog.ShowDialog(FindForm()) != DialogResult.OK)
+                return;
+
+            var totalBytes = _attachments.Sum(attachment =>
+            {
+                try { return new FileInfo(attachment.Path).Length; }
+                catch { return 0L; }
+            });
+            foreach (var file in dialog.FileNames)
+            {
+                try
+                {
+                    if (_attachments.Count >= ChatMediaStorage.MaximumAttachments)
+                        throw new InvalidDataException($"Vous pouvez joindre au maximum {ChatMediaStorage.MaximumAttachments} fichiers.");
+                    var size = new FileInfo(file).Length;
+                    if (totalBytes + size > ChatMediaStorage.MaximumTotalBytes)
+                        throw new InvalidDataException("La taille totale des pièces jointes ne peut pas dépasser 512 Mo.");
+                    var attachment = ChatMediaStorage.Import(file);
+                    _attachments.Add(attachment);
+                    totalBytes += size;
+                }
+                catch (Exception exception)
+                {
+                    MessageBox.Show(FindForm(), exception.Message, "Pièce jointe refusée",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+            UpdateAttachmentLabel();
+        }
+
+        private void ClearAttachments()
+        {
+            if (_attachments.Count == 0)
+                return;
+            _attachments.Clear();
+            UpdateAttachmentLabel();
+        }
+
+        private void UpdateAttachmentLabel()
+        {
+            if (_attachments.Count == 0)
+            {
+                _attachmentsLabel.Text = _supportsMultimodal == false
+                    ? "Ce modèle n’a pas de projecteur multimodal"
+                    : "Aucune pièce jointe · images, audio et vidéo selon le modèle";
+                _attachmentsLabel.ForeColor = _supportsMultimodal == false
+                    ? ThemeColors.Warning
+                    : ThemeColors.TextMuted;
+                _attachmentsLabel.Cursor = Cursors.Default;
+                return;
+            }
+
+            var names = string.Join(", ", _attachments.Select(item => item.Name));
+            _attachmentsLabel.Text = $"{_attachments.Count} fichier(s) joint(s) : {names} · cliquer pour tout retirer";
+            _attachmentsLabel.ForeColor = ThemeColors.TextSecondary;
+            _attachmentsLabel.Cursor = Cursors.Hand;
         }
 
         private void CancelMessageEdit()
@@ -3262,6 +3520,7 @@ namespace LocalAIApp
         private void UpdateInteractionState()
         {
             _sendBtn.Enabled = _ready && _modelSelected && !_isCancelling;
+            _attachBtn.Enabled = _ready && _modelSelected && !_isGenerating && !_isCancelling && _supportsMultimodal != false;
             _inputBox.Enabled = _ready && !_isGenerating;
             _sendBtn.Text = _isCancelling ? "Arrêt…" : _isGenerating ? "Annuler" : _isEditingMessage ? "Renvoyer" : "Envoyer";
         }
@@ -3271,6 +3530,8 @@ namespace LocalAIApp
             BackColor = ThemeColors.Surface;
             _inputBox.BackColor = ThemeColors.CodeBackground;
             _inputBox.ForeColor = ThemeColors.TextPrimary;
+            _attachmentsLabel.BackColor = ThemeColors.Surface;
+            _modelLabel.BackColor = ThemeColors.Surface;
         }
     }
 
@@ -4829,3 +5090,4 @@ namespace LocalAIApp
         }
     }
 }
+

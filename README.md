@@ -1,10 +1,12 @@
 # Local IA Runner
 
-Application Windows WinForms (.NET 10) pour exécuter des modèles de texte GGUF avec llama.cpp et générer des images avec stable-diffusion.cpp. Le backend Python utilise uniquement la bibliothèque standard. L'installateur Windows x64 et la version portable incluent les runtimes nécessaires, le moteur llama.cpp CPU ainsi que les moteurs stable-diffusion.cpp Vulkan et CPU.
+Application Windows WinForms (.NET 10) pour exécuter des modèles GGUF avec llama.cpp et générer des images avec stable-diffusion.cpp. Les modèles multimodaux compatibles peuvent recevoir des images, de l'audio et des vidéos dans le chat. Le backend Python utilise uniquement la bibliothèque standard. L'installateur Windows x64 et la version portable incluent les runtimes nécessaires, le moteur llama.cpp CPU ainsi que les moteurs stable-diffusion.cpp Vulkan et CPU.
 
 ## Fonctionnalités
 
 - Génération locale à partir de fichiers `.gguf`
+- Envoi d'images, d'audio et de vidéos aux modèles multimodaux compatibles, avec aperçus et lecteurs dans la conversation
+- Affichage direct dans le chat des images créées par l'outil de génération
 - Génération d'images avec les profils et modèles pris en charge par stable-diffusion.cpp
 - Outils du modèle pour retrouver, copier, renommer et déplacer les images générées dans un projet de code
 - Forum local où les modèles peuvent rechercher et partager des informations entre eux
@@ -29,6 +31,8 @@ L'affichage du chat utilise Microsoft Edge WebView2. L'installateur vérifie le 
 
 Les réponses acceptent un sous-ensemble courant de Markdown : titres, listes, citations, liens, emphase et blocs de code. Le HTML fourni par les modèles est affiché comme du texte et n'est pas exécuté. Les blocs de code peuvent être copiés ou téléchargés depuis la conversation.
 
+Le bouton **Joindre** accepte les images PNG, JPEG, BMP et GIF, l'audio MP3, WAV et FLAC, ainsi que les vidéos MP4, WebM, MOV, MKV, AVI et MPEG. Les pièces jointes sont copiées dans `%APPDATA%\LocalIARunner\ChatMedia` pour rester disponibles au rechargement du chat. Il faut choisir un GGUF multimodal accompagné d'un fichier `.mmproj` compatible; les modèles sans projecteur ne reçoivent pas les fichiers. La vidéo est échantillonnée à une image par seconde. Au premier envoi vidéo, si FFmpeg et FFprobe ne sont pas dans le PATH, l'application télécharge la compilation Windows Essentials, vérifie son empreinte SHA-256 et l'installe dans `%APPDATA%\LocalIARunner\runtime\ffmpeg`. Ce téléchargement à la demande provient des [compilations Windows Gyan.dev](https://www.gyan.dev/ffmpeg/builds/); leur compilation Essentials est distribuée séparément sous licence GPLv3. Les images générées avec l'outil `generate_image` sont montrées directement dans le message de l'assistant.
+
 Le workflow `.github/workflows/release.yml` publie un GitHub Release uniquement sur demande : lancement manuel depuis l'onglet Actions ou commit dont le message commence par `[publish-release]`. Chaque release reçoit une version croissante `1.0.<numéro du build>`, une description basée sur le sujet et le corps du commit de publication, l'installateur ainsi que l'archive portable versionnée. Le manifeste `latest-release.json` est aussi joint à chaque release pour éviter la limite de requêtes de l'API GitHub; une copie est maintenue dans le dépôt. Les compilations locales suppriment les anciennes versions portables après la génération de la nouvelle.
 
 Pour compiler uniquement l'installateur, exécuter :
@@ -51,7 +55,7 @@ Pour développer et lancer directement depuis les sources, compiler `WinFormsApp
 2. Pour générer une image, ouvrir **Outils > Générer une image**, choisir le dossier de modèles stable-diffusion.cpp puis cliquer sur **Analyser les modèles**.
 3. Choisir un profil et ses composants, écrire un prompt et régler les dimensions, le nombre d'étapes et le guidage. L'application affiche la progression, permet d'annuler et enregistre l'image dans le dossier de sortie choisi.
 
-Pour les modèles de texte, le scan rapide consulte le dossier choisi et les emplacements habituels de LM Studio (`%USERPROFILE%\.lmstudio\models`), Jan, GPT4All, text-generation-webui et Pinokio. **Fichier > Rechercher les modèles (rapide)** relance ce scan ciblé. **Fichier > Rechercher les modèles sur tout le PC** parcourt les lecteurs locaux fixes et amovibles depuis leur racine; la recherche continue en arrière-plan et peut être arrêtée depuis **Fichier > Annuler la recherche des modèles**. Dans les paramètres, **Parcourir tous les lecteurs au démarrage** active ce mode complet aussi au démarrage et lors de l'actualisation. Il est désactivé par défaut. Les lecteurs réseau, les dossiers auxquels Windows refuse l'accès et les liens de jonction sont ignorés. Seuls les fichiers GGUF compatibles avec le chargement local sont répertoriés; aucun fichier n'est déplacé ni copié.
+Pour les modèles de texte et multimodaux, le scan rapide consulte le dossier choisi et les emplacements habituels de LM Studio (`%USERPROFILE%\.lmstudio\models`), Jan, GPT4All, text-generation-webui et Pinokio. **Fichier > Rechercher les modèles (rapide)** relance ce scan ciblé. **Fichier > Rechercher les modèles sur tout le PC** parcourt les lecteurs locaux fixes et amovibles depuis leur racine; la recherche continue en arrière-plan et peut être arrêtée depuis **Fichier > Annuler la recherche des modèles**. Dans les paramètres, **Parcourir tous les lecteurs au démarrage** active ce mode complet aussi au démarrage et lors de l'actualisation. Il est désactivé par défaut. Les lecteurs réseau, les dossiers auxquels Windows refuse l'accès et les liens de jonction sont ignorés. Seuls les fichiers GGUF compatibles avec le chargement local sont répertoriés; aucun fichier n'est déplacé ni copié.
 
 Les modèles d'images (`.safetensors`, `.gguf`, `.sft`, `.ckpt`, `.pt`, `.pth` et `.bin`) sont recherchés dans les catégories reconnues par stable-diffusion.cpp, comme `checkpoints`, `diffusion_models`, `text_encoders` et `vae`, y compris dans leurs sous-dossiers. Les fichiers de modèle posés directement à la racine d'un dossier sélectionné sont aussi détectés sans être déplacés ni copiés. L'application affiche le chemin relatif et sélectionne automatiquement un profil compatible avec les fichiers trouvés. Les moteurs fournis sont placés à côté de l'application dans `stable-diffusion.cpp\windows-vulkan` et `stable-diffusion.cpp\windows-cpu`; les modèles et images restent dans les dossiers choisis par l'utilisateur. Pour les modèles GGUF multimodaux, place le fichier `.mmproj` à côté du GGUF principal : l'application le passe à `llama-server` automatiquement lorsqu'il est le seul projecteur du dossier, ou lorsqu'un seul correspond clairement au nom du modèle. Le fichier `.mmproj` reste auxiliaire et ne se sélectionne pas seul.
 
@@ -122,3 +126,4 @@ LocalAIApp/
   WinFormsApp/Installer/licenses/
   PythonBackend/ai_backend.py
 ```
+

@@ -62,6 +62,7 @@ MAX_WEB_SEARCH_SNIPPET_CHARS = 260
 WEB_SEARCH_RESULT_CONTEXT_CHARS = 1_800
 MAX_WORKSPACE_FILE_BYTES = 512_000
 MAX_IMAGE_TOOL_FILE_BYTES = 512 * 1024 * 1024
+MAX_CHAT_ATTACHMENT_BYTES = 512 * 1024 * 1024
 IMAGE_FILE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"})
 
 
@@ -807,6 +808,8 @@ class LlamaCppBackend:
                 total = int(response.headers.get("Content-Length") or 0)
                 downloaded = 0
                 while True:
+                    if self._cancel_requested.is_set():
+                        raise InterruptedError("Téléchargement de FFmpeg annulé.")
                     chunk = response.read(1024 * 1024)
                     if not chunk:
                         break
@@ -1483,11 +1486,13 @@ class LlamaCppBackend:
 
         resolved_model_path = str(model_file.resolve())
         mmproj_path, ambiguous_mmproj = self._find_mmproj_for_model(model_file)
+        video_ffmpeg_directory = self._video_ffmpeg_directory()
         thread_count = max(1, int(threads or self.cpu_threads))
         gpu_layers = int(ngl)
         context_size = max(128, int(context_size))
         use_mmap = bool(use_mmap)
-        config = (resolved_model_path, mmproj_path, gpu_layers, thread_count, context_size, use_mmap)
+        config = (resolved_model_path, mmproj_path, gpu_layers, thread_count, context_size,
+                  use_mmap, video_ffmpeg_directory)
 
         # The text and diffusion engines share system memory and the GPU. Keep
         # only the engine selected by the most recent generation mode loaded.
@@ -1511,6 +1516,8 @@ class LlamaCppBackend:
                 return False
 
             port = self._reserve_local_port()
+            media_directory = self._chat_media_directory()
+            media_directory.mkdir(parents=True, exist_ok=True)
             log_path = Path(tempfile.gettempdir()) / f"LocalAIApp_llama-server_{port}.log"
             command = [
                 server_path,
@@ -1521,10 +1528,16 @@ class LlamaCppBackend:
                 "-ngl", str(gpu_layers),
                 "-c", str(context_size),
                 "--load-mode", "mmap" if use_mmap else "none",
-                "--no-webui"
+                "--no-webui",
+                "--media-path", str(self._chat_media_directory())
             ]
             if mmproj_path:
                 command.extend(["--mmproj", mmproj_path])
+            if video_ffmpeg_directory:
+                command.extend([
+                    "--video-ffmpeg-dir", video_ffmpeg_directory,
+                    "--video-fps", "1"
+                ])
 
             loading_message = f"Chargement du modèle en mémoire: {model_file.name}"
             if mmproj_path:
@@ -1574,7 +1587,11 @@ class LlamaCppBackend:
                             "type": "debug",
                             "content": f"llama-server prêt, modèle chargé en mémoire: {model_file.name}, PID={process.pid}"
                         })
-                        self.send({"type": "model_loaded", "content": model_file.name})
+                        self.send({
+                            "type": "model_loaded",
+                            "content": model_file.name,
+                            "supports_multimodal": bool(mmproj_path)
+                        })
                         return True
                     time.sleep(0.25)
 
@@ -1597,7 +1614,7 @@ class LlamaCppBackend:
                  code_execution_timeout_seconds=30, generated_images_directory=None,
                  enable_forum=False, enable_subagents=False,
                  available_subagent_models=None, available_local_models=None,
-                 ultra_lite=False):
+                 ultra_lite=False, attachments=None):
         """Generate through the persistent server; weights stay loaded between turns."""
         try:
             try:
@@ -1608,12 +1625,28 @@ class LlamaCppBackend:
                 self.code_execution_timeout_seconds = max(1, min(7200, int(code_execution_timeout_seconds)))
             except (TypeError, ValueError):
                 self.code_execution_timeout_seconds = 30
+            if stream:
+                self.send({"type": "generation_start"})
             if str(generated_images_directory or "").strip():
                 self.generated_images_directory = str(
                     Path(generated_images_directory).expanduser().resolve()
                 )
 
             prompt = str(prompt or "")
+            attachments = self._validate_chat_attachments(attachments)
+            if attachments:
+                candidate_model = Path(model_path)
+                mmproj_path, ambiguous_mmproj = self._find_mmproj_for_model(candidate_model)
+                self.send({"type": "model_capabilities", "model_path": str(candidate_model.resolve()),
+                           "supports_multimodal": bool(mmproj_path)})
+                if not mmproj_path:
+                    reason = "Plusieurs fichiers mmproj ne correspondent pas clairement au modèle." if ambiguous_mmproj else "Aucun fichier mmproj compatible n’a été trouvé à côté du modèle."
+                    raise ValueError(
+                        "Ce modèle ne peut pas recevoir de pièce jointe multimodale. " + reason +
+                        " Choisissez un modèle vision/audio/vidéo avec son projecteur mmproj."
+                    )
+            if any(item["kind"] == "video" for item in attachments):
+                self._ensure_video_ffmpeg()
             ultra_lite = bool(ultra_lite)
             goal_prefix = None if ultra_lite else re.match(r"^\s*goal\s*:\s*", prompt, flags=re.IGNORECASE)
             if goal_prefix:
@@ -1633,9 +1666,6 @@ class LlamaCppBackend:
             )
             self._subagent_session_id = uuid.uuid4().hex
             self._subagent_forum_clear_status = None
-
-            if stream:
-                self.send({"type": "generation_start"})
 
             if self._cancel_requested.is_set():
                 self._send_empty_conversation_title(conversation_id, cancelled=True)
@@ -1705,9 +1735,9 @@ class LlamaCppBackend:
                 # bypasses tool execution and every generated tool instruction.
                 if stream:
                     self.send({"type": "stream_start"})
-                    self._stream_generate(prompt, history)
+                    self._stream_generate(prompt, history, attachments)
                 else:
-                    self._generate_sync(prompt, history)
+                    self._generate_sync(prompt, history, attachments)
                 return
 
             image_model_path = str(default_image_model_path or "").strip()
@@ -1731,6 +1761,7 @@ class LlamaCppBackend:
                     goal_mode=goal_mode,
                     available_subagent_models=available_subagent_models,
                     available_local_models=available_local_models,
+                    attachments=attachments,
                     tool_options={
                         "ngl": ngl,
                         "threads": threads,
@@ -1752,9 +1783,9 @@ class LlamaCppBackend:
                 )
             elif stream:
                 self.send({"type": "stream_start"})
-                self._stream_generate(prompt, history)
+                self._stream_generate(prompt, history, attachments)
             else:
-                self._generate_sync(prompt, history)
+                self._generate_sync(prompt, history, attachments)
         except Exception as e:
             self._send_empty_conversation_title(
                 conversation_id,
@@ -1927,21 +1958,178 @@ class LlamaCppBackend:
         return not (cancelled or self._cancel_requested.is_set())
 
     @staticmethod
-    def _build_messages(history, prompt):
+    def _chat_media_directory():
+        app_data = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        return (Path(app_data).expanduser().resolve() / "LocalIARunner" / "ChatMedia")
+
+    @classmethod
+    def _video_ffmpeg_directory(cls):
+        ffmpeg = shutil.which("ffmpeg")
+        ffprobe = shutil.which("ffprobe")
+        if ffmpeg and ffprobe and Path(ffmpeg).parent == Path(ffprobe).parent:
+            return str(Path(ffmpeg).parent.resolve())
+
+        app_ffmpeg = cls._chat_media_directory().parent / "runtime" / "ffmpeg" / "bin"
+        if (app_ffmpeg / "ffmpeg.exe").is_file() and (app_ffmpeg / "ffprobe.exe").is_file():
+            return str(app_ffmpeg.resolve())
+        return None
+
+    def _ensure_video_ffmpeg(self):
+        existing = self._video_ffmpeg_directory()
+        if existing:
+            return existing
+
+        bin_directory = self._chat_media_directory().parent / "runtime" / "ffmpeg" / "bin"
+        bin_directory.mkdir(parents=True, exist_ok=True)
+        archive_path = bin_directory.parent / "ffmpeg-download.zip"
+        url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+        self.send({"type": "model_loading", "content": "Téléchargement du décodeur vidéo FFmpeg (première utilisation)…"})
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": "LocalIARunner/1.0"})
+            downloaded = 0
+            last_reported = 0
+            archive_hash = hashlib.sha256()
+            with urllib.request.urlopen(request, timeout=45) as response, open(archive_path, "wb") as output:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    downloaded += len(chunk)
+                    if downloaded > 256 * 1024 * 1024:
+                        raise RuntimeError("L’archive FFmpeg dépasse la limite de 256 Mo.")
+                    output.write(chunk)
+                    archive_hash.update(chunk)
+                    if downloaded - last_reported >= 16 * 1024 * 1024:
+                        last_reported = downloaded
+                        self.send({
+                            "type": "model_loading",
+                            "content": f"Téléchargement de FFmpeg : {downloaded // (1024 * 1024)} Mo reçus…"
+                        })
+
+            checksum_request = urllib.request.Request(url + ".sha256", headers={"User-Agent": "LocalIARunner/1.0"})
+            with urllib.request.urlopen(checksum_request, timeout=30) as response:
+                checksum_text = response.read(4096).decode("ascii", errors="ignore")
+            expected_hash = re.search(r"\b[0-9a-fA-F]{64}\b", checksum_text)
+            if not expected_hash or archive_hash.hexdigest().lower() != expected_hash.group(0).lower():
+                raise RuntimeError("La vérification SHA-256 de l’archive FFmpeg a échoué.")
+
+            self.send({"type": "model_loading", "content": "Installation du décodeur vidéo…"})
+            with zipfile.ZipFile(archive_path) as archive:
+                entries = {}
+                for info in archive.infolist():
+                    normalized = info.filename.replace("\\", "/").lower()
+                    if normalized.endswith("/bin/ffmpeg.exe"):
+                        entries["ffmpeg.exe"] = info
+                    elif normalized.endswith("/bin/ffprobe.exe"):
+                        entries["ffprobe.exe"] = info
+                if set(entries) != {"ffmpeg.exe", "ffprobe.exe"}:
+                    raise RuntimeError("L’archive téléchargée ne contient pas ffmpeg.exe et ffprobe.exe.")
+                for output_name, info in entries.items():
+                    if info.file_size > 160 * 1024 * 1024:
+                        raise RuntimeError(f"Le fichier {output_name} dans l’archive est trop volumineux.")
+                    destination = bin_directory / output_name
+                    temporary = destination.with_suffix(".tmp")
+                    with archive.open(info) as source, open(temporary, "wb") as output:
+                        shutil.copyfileobj(source, output, length=1024 * 1024)
+                    temporary.replace(destination)
+        except Exception as error:
+            try:
+                archive_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise RuntimeError(
+                "Impossible de préparer le décodage vidéo. Vérifiez l’accès à Internet ou installez FFmpeg et FFprobe dans le PATH. "
+                + str(error)
+            ) from error
+
+        try:
+            archive_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return str(bin_directory.resolve())
+
+    @classmethod
+    def _validate_chat_attachments(cls, attachments):
+        if not isinstance(attachments, list):
+            return []
+        if len(attachments) > 10:
+            raise ValueError("Une requête peut contenir au maximum 10 pièces jointes.")
+        media_root = cls._chat_media_directory()
+        validated = []
+        total_bytes = 0
+        for item in attachments:
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("kind", "")).strip().lower()
+            if kind not in ("image", "audio", "video"):
+                continue
+            path = Path(str(item.get("path", ""))).expanduser().resolve()
+            try:
+                path.relative_to(media_root)
+            except ValueError as error:
+                raise ValueError("Une pièce jointe ne se trouve pas dans le dossier média de l’application.") from error
+            if not path.is_file():
+                raise ValueError(f"La pièce jointe « {item.get('name') or path.name} » est introuvable.")
+            file_size = path.stat().st_size
+            if file_size > MAX_CHAT_ATTACHMENT_BYTES:
+                raise ValueError(f"La pièce jointe « {path.name} » dépasse la limite de 512 Mo.")
+            total_bytes += file_size
+            if total_bytes > MAX_CHAT_ATTACHMENT_BYTES:
+                raise ValueError("La taille totale des pièces jointes dépasse la limite de 512 Mo.")
+            validated.append({
+                "kind": kind,
+                "path": str(path),
+                "name": str(item.get("name") or path.name)
+            })
+        return validated
+
+    @classmethod
+    def _message_content_with_media(cls, content, attachments):
+        text = str(content or "")
+        parts = [{"type": "text", "text": text}] if text else []
+        media_root = cls._chat_media_directory()
+        for attachment in attachments or []:
+            if not isinstance(attachment, dict):
+                continue
+            path = Path(str(attachment.get("path", ""))).expanduser().resolve()
+            relative_path = path.relative_to(media_root).as_posix()
+            media_url = "file://" + urllib.parse.quote(relative_path, safe="/")
+            kind = str(attachment.get("kind", "")).lower()
+            if kind == "image":
+                parts.append({"type": "image_url", "image_url": {"url": media_url}})
+            elif kind == "audio":
+                audio_format = path.suffix.lstrip(".").lower()
+                parts.append({
+                    "type": "input_audio",
+                    "input_audio": {"url": media_url, "format": audio_format}
+                })
+            elif kind == "video":
+                parts.append({
+                    "type": "input_video",
+                    "input_video": {"url": media_url, "format": "auto"}
+                })
+        return parts if len(parts) > 1 or (parts and parts[0]["type"] != "text") else (text if text else parts)
+
+    @classmethod
+    def _build_messages(cls, history, prompt, attachments=None):
         """Pass role-tagged messages so llama-server applies the model chat template."""
         messages = []
         for msg in history:
             role = msg.get("role")
             if role not in ("system", "user", "assistant"):
                 continue
+            content = str(msg.get("content", ""))
+            if role == "user" and msg.get("attachments"):
+                content = cls._message_content_with_media(content, msg.get("attachments"))
             if role != "system":
-                messages.append({"role": role, "content": str(msg.get("content", ""))})
+                messages.append({"role": role, "content": content})
             elif not any(item["role"] == "system" for item in messages):
-                messages.insert(0, {"role": "system", "content": str(msg.get("content", ""))})
+                messages.insert(0, {"role": "system", "content": content})
 
         system_messages = [msg for msg in messages if msg["role"] == "system"]
         conversation_messages = [msg for msg in messages if msg["role"] != "system"][-6:]
-        return system_messages[:1] + conversation_messages + [{"role": "user", "content": prompt}]
+        final_content = cls._message_content_with_media(prompt, attachments)
+        return system_messages[:1] + conversation_messages + [{"role": "user", "content": final_content}]
 
     def _new_request_connection(self):
         with self._server_state_lock:
@@ -2041,11 +2229,11 @@ class LlamaCppBackend:
                 return content
         return self._thinking_markup(reasoning) + content
 
-    def _generate_sync(self, prompt, history):
+    def _generate_sync(self, prompt, history, attachments=None):
         """Synchronous fallback through the same already-loaded server."""
         connection = None
         try:
-            messages = self._build_messages(history, prompt)
+            messages = self._build_messages(history, prompt, attachments)
             connection = self._new_request_connection()
             connection.request(
                 "POST",
@@ -3137,8 +3325,8 @@ class LlamaCppBackend:
                              enable_image_generation=False, default_image_model_path=None,
                              enable_forum=False, enable_subagents=False, goal_mode=False,
                              available_subagent_models=None, tool_options=None,
-                             available_local_models=None):
-        messages = self._build_messages(history, prompt)
+                             available_local_models=None, attachments=None):
+        messages = self._build_messages(history, prompt, attachments)
         task_message = messages[-1]
         base_system_prompt = ""
         if messages and messages[0].get("role") == "system":
@@ -3178,16 +3366,23 @@ class LlamaCppBackend:
             return ("" if goal_mode else "".join(tool_reasoning)) + content
 
         def image_links_text():
-            links = []
-            for index, image_path in enumerate(generated_image_paths, start=1):
-                try:
-                    image_uri = Path(image_path).resolve().as_uri()
-                except (OSError, ValueError):
-                    image_uri = str(image_path)
-                links.append(f"[Ouvrir l’image générée {index}]({image_uri})")
-            return "\n\n" + "\n".join(links) if links else ""
+            labels = [f"Image générée : {Path(image_path).name}" for image_path in generated_image_paths]
+            return "\n\n" + "\n".join(labels) if labels else ""
 
         def finish(content, cancelled=False, error=None, stream_started=False):
+            media = []
+            for image_path in generated_image_paths:
+                try:
+                    media_path = str(Path(image_path).resolve())
+                    if Path(media_path).is_file():
+                        media.append({
+                            "kind": "image",
+                            "path": media_path,
+                            "name": Path(media_path).name,
+                            "content_type": "image/" + (Path(media_path).suffix.lstrip(".").lower() or "png")
+                        })
+                except (OSError, ValueError):
+                    continue
             if stream:
                 if not stream_started:
                     self.send({"type": "stream_start"})
@@ -3197,13 +3392,14 @@ class LlamaCppBackend:
                 self.send({
                     "type": "stream_end",
                     "content": content,
+                    "media": media,
                     "cancelled": cancelled,
                     "error": error
                 })
             elif error:
-                self.send({"type": "error", "content": error + (("\n" + content) if content else "")})
+                self.send({"type": "error", "content": error + (("\n" + content) if content else ""), "media": media})
             else:
-                self.send({"type": "response", "content": content, "cancelled": cancelled})
+                self.send({"type": "response", "content": content, "cancelled": cancelled, "media": media})
 
         while not self._cancel_requested.is_set():
             if time.monotonic() - generation_started > self.max_generation_seconds:
@@ -3302,9 +3498,15 @@ class LlamaCppBackend:
                         self.send({"type": "stream_start"})
                     if generated_image_paths:
                         self.send({"type": "stream_token", "content": image_links_text()})
-                    self.send({"type": "stream_end", "content": content, "cancelled": False})
+                    self.send({"type": "stream_end", "content": content, "cancelled": False,
+                               "media": [{"kind": "image", "path": str(Path(path).resolve()),
+                                          "name": Path(path).name, "content_type": "image/" + (Path(path).suffix.lstrip(".").lower() or "png")}
+                                         for path in generated_image_paths if Path(path).is_file()]})
                 else:
-                    self.send({"type": "response", "content": content})
+                    self.send({"type": "response", "content": content,
+                               "media": [{"kind": "image", "path": str(Path(path).resolve()),
+                                          "name": Path(path).name, "content_type": "image/" + (Path(path).suffix.lstrip(".").lower() or "png")}
+                                         for path in generated_image_paths if Path(path).is_file()]})
                 return
 
             tool_limit = MAX_GOAL_TOOL_CALLS_PER_TURN if goal_mode else MAX_TOOL_CALLS_PER_TURN
@@ -4427,7 +4629,7 @@ class LlamaCppBackend:
                 self._clear_request_connection(connection)
             self._generation_lock.release()
 
-    def _stream_generate(self, prompt, history):
+    def _stream_generate(self, prompt, history, attachments=None):
         """Stream SSE token chunks from the persistent llama-server process."""
         connection = None
         full_response = ""
@@ -4440,7 +4642,7 @@ class LlamaCppBackend:
             if self._cancel_requested.is_set():
                 cancelled = True
             else:
-                messages = self._build_messages(history, prompt)
+                messages = self._build_messages(history, prompt, attachments)
                 connection = self._new_request_connection()
                 connection.request(
                     "POST",
@@ -4583,6 +4785,7 @@ def main():
                 available_subagent_models = request.get("available_subagent_models", [])
                 available_local_models = request.get("available_local_models", available_subagent_models)
                 ultra_lite = request.get("ultra_lite", False)
+                attachments = request.get("attachments", [])
 
                 if not backend.begin_generation():
                     backend.send({"type": "error", "content": "Une generation est deja en cours."})
@@ -4601,7 +4804,8 @@ def main():
                               reasoning_effort, use_mmap, default_image_model_path,
                               generation_timeout_seconds, code_execution_timeout_seconds,
                               generated_images_directory, enable_forum, enable_subagents,
-                              available_subagent_models, available_local_models, ultra_lite),
+                              available_subagent_models, available_local_models, ultra_lite,
+                              attachments),
                         daemon=False  # Non-daemon so we can wait
                     )
                     t.start()
@@ -4640,6 +4844,15 @@ def main():
                 except Exception:
                     backend.end_generation()
                     raise
+
+            elif req_type == "check_model_capabilities":
+                model_path = Path(request.get("model_path", "")).expanduser()
+                mmproj_path, _ = backend._find_mmproj_for_model(model_path)
+                backend.send({
+                    "type": "model_capabilities",
+                    "model_path": str(model_path.resolve()),
+                    "supports_multimodal": bool(mmproj_path)
+                })
 
             elif req_type == "load_model":
                 model_path = request.get("model_path", "")
@@ -4689,3 +4902,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -136,6 +136,7 @@ public sealed class ChatPanel : DoubleBufferedPanel
                     Time = (message.Timestamp == default ? DateTime.Now : message.Timestamp).ToString("HH:mm"),
                     Thinking = parsed.Thinking,
                     Content = parsed.Response,
+                    Attachments = message.Attachments ?? new List<ChatAttachment>(),
                     ConversationIndex = index
                 });
             }
@@ -143,7 +144,8 @@ public sealed class ChatPanel : DoubleBufferedPanel
         });
     }
 
-    public void AddMessage(string sender, string content, bool isUser, int conversationIndex = -1)
+    public void AddMessage(string sender, string content, bool isUser, int conversationIndex = -1,
+                           IEnumerable<ChatAttachment>? attachments = null)
     {
         RunOnUi(() =>
         {
@@ -158,6 +160,7 @@ public sealed class ChatPanel : DoubleBufferedPanel
                 Time = DateTime.Now.ToString("HH:mm"),
                 Thinking = parsed.Thinking,
                 Content = parsed.Response,
+                Attachments = (attachments ?? Enumerable.Empty<ChatAttachment>()).ToList(),
                 ConversationIndex = conversationIndex
             });
             if (isUser)
@@ -322,6 +325,11 @@ public sealed class ChatPanel : DoubleBufferedPanel
             _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
             _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+            Directory.CreateDirectory(ChatMediaStorage.Root);
+            _webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+                "localia.media",
+                ChatMediaStorage.Root,
+                CoreWebView2HostResourceAccessKind.Allow);
             _webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
 
             using var htmlStream = typeof(ChatPanel).Assembly.GetManifestResourceStream("LocalAIApp.Assets.chat-surface.html")
@@ -392,6 +400,9 @@ public sealed class ChatPanel : DoubleBufferedPanel
                 case "download":
                     SaveCodeFile((string?)request["filename"] ?? "script.txt", text);
                     break;
+                case "downloadMedia":
+                    SaveMediaFile((string?)request["url"] ?? "", (string?)request["filename"] ?? "media");
+                    break;
                 case "editMessage":
                 {
                     var conversationIndex = (int?)request["conversationIndex"];
@@ -429,6 +440,33 @@ public sealed class ChatPanel : DoubleBufferedPanel
             return;
         File.WriteAllText(dialog.FileName, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         Notify("Fichier enregistré.");
+    }
+
+    private void SaveMediaFile(string url, string fileName)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttps ||
+            !string.Equals(uri.Host, "localia.media", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Cette pièce jointe n'appartient pas au chat.");
+
+        var relativePath = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/'))
+            .Replace('/', Path.DirectorySeparatorChar);
+        var sourcePath = Path.GetFullPath(Path.Combine(ChatMediaStorage.Root, relativePath));
+        if (ChatMediaStorage.GetMediaUrl(sourcePath) == null)
+            throw new FileNotFoundException("La pièce jointe n'est plus disponible.");
+
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Télécharger la pièce jointe",
+            FileName = Path.GetFileName(fileName),
+            AddExtension = false,
+            OverwritePrompt = true,
+            Filter = "Tous les fichiers|*.*"
+        };
+        if (dialog.ShowDialog(FindForm()) != DialogResult.OK)
+            return;
+        File.Copy(sourcePath, dialog.FileName, overwrite: true);
+        Notify("Pièce jointe enregistrée.");
     }
 
     private async Task InstallWebViewRuntimeAsync()
@@ -645,6 +683,7 @@ public sealed class ChatPanel : DoubleBufferedPanel
         public string SystemKind { get; set; } = "info";
         public bool IsStreaming { get; set; }
         public int ConversationIndex { get; set; } = -1;
+        public List<ChatAttachment> Attachments { get; set; } = new();
 
         public object ToViewModel() => new
         {
@@ -655,7 +694,15 @@ public sealed class ChatPanel : DoubleBufferedPanel
             thinking = Thinking,
             systemKind = SystemKind,
             streaming = IsStreaming,
-            conversationIndex = ConversationIndex
+            conversationIndex = ConversationIndex,
+            attachments = Attachments.Select(attachment => new
+            {
+                name = attachment.Name,
+                kind = attachment.Kind,
+                contentType = attachment.ContentType,
+                url = ChatMediaStorage.GetMediaUrl(attachment.Path)
+            }).Where(attachment => !string.IsNullOrWhiteSpace(attachment.url)).ToArray()
         };
     }
 }
+
