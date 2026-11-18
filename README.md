@@ -93,6 +93,8 @@ La consigne du modèle donne un exemple complet pour chaque outil. Le format à 
 
 La réponse complète doit contenir uniquement cet appel, sans phrase ni Markdown autour. Un seul outil est appelé à la fois; après son résultat, le modèle peut continuer. Pour `write_file`, encode les retours de ligne du contenu en `\n`. Les chemins de fichiers sont limités au dossier de travail configuré. L'écriture de fichiers et l'exécution Python doivent être autorisées dans les paramètres.
 
+`web_search` renvoie au maximum trois résultats avec des extraits courts pour qu'ils tiennent dans le contexte du modèle. Le backend retire d'abord les anciens échanges si nécessaire et conserve l'appel courant. Pour consulter davantage de détails, le modèle peut ouvrir l'URL d'un résultat avec `browse_url`.
+
 Quand ces outils sont autorisés, le modèle peut utiliser `list_images` pour parcourir le dossier de sortie configuré dans la fenêtre de génération d'images (par défaut `Pictures\LocalIARunner`), `copy_image` pour copier une image générée dans le dossier du projet et `move_image` pour la renommer/déplacer dans le dossier des images ou vers le projet. Les chemins sont relatifs à ces deux dossiers, les fichiers existants ne sont pas remplacés et les images ne peuvent pas sortir de ces emplacements. Après copie dans le projet, le modèle peut référencer l'image dans son code, par exemple `assets/image.png`.
 
 Dans **Outils / Paramètres / Délais des outils**, tu peux régler le délai d'inactivité d'une génération (30 secondes à 2 heures, 900 secondes par défaut) ainsi que le temps maximal accordé à un script Python (1 seconde à 2 heures, 30 secondes par défaut). L'activité du modèle et la progression des outils réinitialisent le délai d'inactivité.
