@@ -2093,7 +2093,11 @@ class LlamaCppBackend:
                 continue
             path = Path(str(attachment.get("path", ""))).expanduser().resolve()
             relative_path = path.relative_to(media_root).as_posix()
-            media_url = "file://" + urllib.parse.quote(relative_path, safe="/")
+            # llama-server appends the path after file:// to --media-path as a
+            # literal filesystem path; it does not URL-decode percent escapes.
+            # Keep spaces and UTF-8 characters raw so files with French names
+            # resolve instead of being searched as e.g. "Capture%20d%E2%80%A6.png".
+            media_url = "file://" + relative_path
             kind = str(attachment.get("kind", "")).lower()
             if kind == "image":
                 parts.append({"type": "image_url", "image_url": {"url": media_url}})
