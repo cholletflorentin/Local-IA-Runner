@@ -11,6 +11,7 @@ import json
 import os
 import hashlib
 import base64
+import html
 import http.client
 import socket
 import ipaddress
@@ -2487,6 +2488,10 @@ class LlamaCppBackend:
         if content is None:
             return None
 
+        function_calls = LlamaCppBackend._parse_xml_function_tool_calls(content)
+        if function_calls is not None:
+            return function_calls[0] if len(function_calls) == 1 else None
+
         call = LlamaCppBackend._parse_plain_tool_call(content)
         if call is not None:
             return call
@@ -2500,6 +2505,116 @@ class LlamaCppBackend:
                             + content[closing_match.start():])
                 return LlamaCppBackend._parse_plain_tool_call(repaired)
         return None
+
+    @staticmethod
+    def _parse_tool_calls(content):
+        """Parse one or more standalone tool calls, including llama-style XML functions."""
+        text = str(content or "").strip()
+        function_calls = LlamaCppBackend._parse_xml_function_tool_calls(text)
+        if function_calls is not None:
+            return function_calls
+
+        unwrapped, _ = LlamaCppBackend._unwrap_tool_call_envelope(text)
+        if unwrapped is None:
+            return []
+        function_calls = LlamaCppBackend._parse_xml_function_tool_calls(unwrapped)
+        if function_calls is not None:
+            return function_calls
+        call = LlamaCppBackend._parse_tool_call(unwrapped)
+        return [call] if call is not None else []
+
+    @staticmethod
+    def _parse_xml_function_block(block):
+        """Parse complete <function=name><parameter=...>value</parameter> blocks."""
+        text = str(block or "")
+        function_pattern = re.compile(
+            r"<function\s*=\s*([a-z_][a-z0-9_]*)\s*>(.*?)</function\s*>",
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        parameter_pattern = re.compile(
+            r"<parameter\s*=\s*([a-z_][a-z0-9_]*)\s*>(.*?)</parameter\s*>",
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        calls = []
+        position = 0
+        for function_match in function_pattern.finditer(text):
+            if text[position:function_match.start()].strip():
+                return None
+            name = function_match.group(1).lower()
+            if name not in SUPPORTED_TOOL_NAMES:
+                return None
+
+            arguments = {}
+            parameter_text = function_match.group(2)
+            parameter_position = 0
+            for parameter_match in parameter_pattern.finditer(parameter_text):
+                if parameter_text[parameter_position:parameter_match.start()].strip():
+                    return None
+                parameter_name = parameter_match.group(1).lower()
+                value_text = html.unescape(parameter_match.group(2)).strip()
+                try:
+                    value = json.loads(value_text)
+                except (TypeError, json.JSONDecodeError):
+                    value = value_text
+                arguments[parameter_name] = value
+                parameter_position = parameter_match.end()
+            if parameter_text[parameter_position:].strip():
+                return None
+            calls.append({"name": name, "arguments": arguments})
+            position = function_match.end()
+
+        if not calls or text[position:].strip():
+            return None
+        return calls
+
+    @staticmethod
+    def _parse_xml_function_tool_calls(content):
+        """Parse one or more function calls, optionally inside <tool_call>/<tools> wrappers."""
+        text = str(content or "").strip()
+        if not text:
+            return None
+
+        block_pattern = re.compile(
+            r"<tool_call\s*>(.*?)</tool_call\s*>",
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        blocks = list(block_pattern.finditer(text))
+        if not blocks:
+            for _ in range(2):
+                for opening in ("<response>", "<tools>"):
+                    if text.lower().startswith(opening):
+                        text = text[len(opening):].lstrip()
+                for closing in ("</tools>", "</response>"):
+                    if text.lower().endswith(closing):
+                        text = text[:-len(closing)].rstrip()
+            return LlamaCppBackend._parse_xml_function_block(text)
+
+        prefix = text[:blocks[0].start()].strip()
+        while prefix:
+            opening_found = False
+            for opening in ("<response>", "<tools>"):
+                if prefix.lower().startswith(opening):
+                    prefix = prefix[len(opening):].lstrip()
+                    opening_found = True
+                    break
+            if not opening_found:
+                return None
+
+        calls = []
+        position = blocks[0].start()
+        for block in blocks:
+            gap = text[position:block.start()]
+            if gap.strip() and not LlamaCppBackend._tool_envelope_suffix_is_complete(gap):
+                return None
+            parsed = LlamaCppBackend._parse_xml_function_block(block.group(1))
+            if parsed is None:
+                return None
+            calls.extend(parsed)
+            position = block.end()
+
+        if not LlamaCppBackend._tool_envelope_suffix_is_complete(text[position:]):
+            return None
+        return calls
 
     @staticmethod
     def _parse_plain_tool_call(content):
@@ -2674,6 +2789,11 @@ class LlamaCppBackend:
             return "prefix", ""
         if wrapper_state == "wrapped":
             return "wrapped", stripped
+        function_open = "<function="
+        if function_open.startswith(lowered):
+            return "prefix", ""
+        if lowered.startswith(function_open):
+            return "wrapped", stripped
         if TOOL_CALL_OPEN.startswith(stripped):
             return "prefix", ""
         if stripped.startswith(TOOL_CALL_OPEN):
@@ -2831,8 +2951,10 @@ class LlamaCppBackend:
                 tag_match = re.match(r"\s*<([a-z_]+)", output_buffer, flags=re.IGNORECASE)
                 if tag_match is not None:
                     tool_tag = tag_match.group(1).lower()
-                    tool_style = "tag"
+                    tool_style = "wrapped" if tool_tag == "tool_call" else "tag"
                     in_tool_call = True
+                    if tool_style == "wrapped":
+                        return
                     closing_index = output_buffer.find(f"</{tool_tag}>")
                     if closing_index >= 0:
                         closing_tag = f"</{tool_tag}>"
@@ -2938,14 +3060,14 @@ class LlamaCppBackend:
                 self._clear_request_connection(connection)
 
         if in_tool_call and (tool_close_seen or tool_style in ("function", "wrapped", "tag")):
-            call = self._parse_tool_call(output_buffer)
-            if call is not None:
-                return collected_content(), call, cancelled, error, stream_started
+            calls = self._parse_tool_calls(output_buffer)
+            if calls:
+                return collected_content(), calls, cancelled, error, stream_started
         if output_buffer:
             # Incomplete, malformed, or non-standalone invocations remain ordinary text.
             emit(output_buffer)
 
-        return collected_content(), None, cancelled, error, stream_started
+        return collected_content(), [], cancelled, error, stream_started
 
     def _generate_with_tools(self, prompt, history, stream, enable_web_access,
                              enable_code_execution, code_workspace,
@@ -2980,6 +3102,7 @@ class LlamaCppBackend:
             messages.insert(0, {"role": "system", "content": tool_instructions.strip()})
 
         tool_count = 0
+        pending_tool_calls = []
         goal_round = 0
         generation_started = time.monotonic()
         last_stream_started = False
@@ -3029,30 +3152,45 @@ class LlamaCppBackend:
                 finish(unfinished, error=unfinished)
                 return
 
-            self._trim_tool_messages_to_context(messages, task_message)
-            if stream:
-                content, tool_call, cancelled, error, stream_started = self._stream_tool_completion(
-                    messages, suppress_output=goal_mode
-                )
+            if pending_tool_calls:
+                # Execute batched tool calls one at a time and feed each result
+                # back before asking the model to generate another completion.
+                content = ""
+                tool_call = pending_tool_calls.pop(0)
+                cancelled = self._cancel_requested.is_set()
+                error = None
+                stream_started = False
             else:
-                try:
-                    content = self._request_tool_completion(messages)
-                    response_prefix = self._first_tool_response_prefix(content)
-                    if response_prefix is not None:
-                        content = response_prefix
-                    tool_call = self._parse_tool_call(content)
-                    if tool_call is None:
-                        detected_type, _ = self._detect_tool_call_start(content)
-                        if detected_type in ("tool", "prefix"):
-                            tool_call = {"name": "__invalid_tool_call__", "arguments": {}}
-                    cancelled = self._cancel_requested.is_set()
-                    error = None
-                    stream_started = False
-                except Exception as exception:
-                    content, tool_call = "", None
-                    cancelled = self._cancel_requested.is_set()
-                    error = str(exception)
-                    stream_started = False
+                self._trim_tool_messages_to_context(messages, task_message)
+                if stream:
+                    content, parsed_tool_calls, cancelled, error, stream_started = self._stream_tool_completion(
+                        messages, suppress_output=goal_mode
+                    )
+                else:
+                    try:
+                        content = self._request_tool_completion(messages)
+                        response_prefix = self._first_tool_response_prefix(content)
+                        if response_prefix is not None:
+                            content = response_prefix
+                        parsed_tool_calls = self._parse_tool_calls(content)
+                        if parsed_tool_calls:
+                            content = ""
+                        if not parsed_tool_calls:
+                            detected_type, _ = self._detect_tool_call_start(content)
+                            if detected_type in ("tool", "prefix", "wrapped"):
+                                parsed_tool_calls = [{"name": "__invalid_tool_call__", "arguments": {}}]
+                        cancelled = self._cancel_requested.is_set()
+                        error = None
+                        stream_started = False
+                    except Exception as exception:
+                        content, parsed_tool_calls = "", []
+                        cancelled = self._cancel_requested.is_set()
+                        error = str(exception)
+                        stream_started = False
+
+                tool_call = parsed_tool_calls[0] if parsed_tool_calls else None
+                if len(parsed_tool_calls) > 1:
+                    pending_tool_calls.extend(parsed_tool_calls[1:])
             last_stream_started = stream_started
 
             if error:
@@ -3308,19 +3446,27 @@ class LlamaCppBackend:
             ]
             task_message = messages[-1]
             tool_count = 0
+            pending_tool_calls = []
             while not self._cancel_requested.is_set():
                 if time.monotonic() >= generation_deadline:
                     raise TimeoutError("Le délai maximal de génération est atteint avant la fin du sous-agent.")
-                self._trim_tool_messages_to_context(messages, task_message)
-                content = self._request_tool_completion(messages)
-                response_prefix = self._first_tool_response_prefix(content)
-                if response_prefix is not None:
-                    content = response_prefix
-                tool_call = self._parse_tool_call(content)
-                if tool_call is None:
-                    detected_type, _ = self._detect_tool_call_start(content)
-                    if detected_type in ("tool", "prefix"):
-                        tool_call = {"name": "__invalid_tool_call__", "arguments": {}}
+                if pending_tool_calls:
+                    content = ""
+                    tool_call = pending_tool_calls.pop(0)
+                else:
+                    self._trim_tool_messages_to_context(messages, task_message)
+                    content = self._request_tool_completion(messages)
+                    response_prefix = self._first_tool_response_prefix(content)
+                    if response_prefix is not None:
+                        content = response_prefix
+                    parsed_tool_calls = self._parse_tool_calls(content)
+                    if not parsed_tool_calls:
+                        detected_type, _ = self._detect_tool_call_start(content)
+                        if detected_type in ("tool", "prefix", "wrapped"):
+                            parsed_tool_calls = [{"name": "__invalid_tool_call__", "arguments": {}}]
+                    tool_call = parsed_tool_calls[0] if parsed_tool_calls else None
+                    if len(parsed_tool_calls) > 1:
+                        pending_tool_calls.extend(parsed_tool_calls[1:])
                 if tool_call is None:
                     if goal_mode:
                         messages.append({"role": "assistant", "content": content})
