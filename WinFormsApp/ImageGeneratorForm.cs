@@ -342,6 +342,7 @@ namespace LocalAIApp
                 if (_busy)
                     CancelRequested?.Invoke(this, EventArgs.Empty);
             };
+            ThemeColors.ApplyToControlTree(this);
         }
 
         private void RequestCatalog()

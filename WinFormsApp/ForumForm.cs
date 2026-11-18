@@ -225,6 +225,7 @@ namespace LocalAIApp
             FormClosed += (s, e) => _refreshTimer.Stop();
             SetForumMode(showTemporary: false);
             LoadPosts();
+            ThemeColors.ApplyToControlTree(this);
         }
 
         private static Button CreateButton(string text) => new()

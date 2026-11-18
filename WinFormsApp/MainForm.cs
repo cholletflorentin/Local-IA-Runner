@@ -199,8 +199,9 @@ namespace LocalAIApp
 
             this.Load += (s, e) => 
             {
-                UpdateTheme();
                 LoadAppSettings();
+                ThemeColors.SetDarkMode(_appSettings.DarkMode);
+                UpdateTheme();
                 LoadSavedModelsFolder();
                 StartPythonBackend();
             };
@@ -214,6 +215,7 @@ namespace LocalAIApp
 
         private void UpdateTheme()
         {
+            ThemeColors.ApplyToControlTree(this);
             this.BackColor = ThemeColors.Background;
             this.ForeColor = ThemeColors.TextPrimary;
             _menuStrip.UpdateTheme();
@@ -221,6 +223,10 @@ namespace LocalAIApp
             _chatPanel.UpdateTheme();
             _inputPanel.UpdateTheme();
             _sidebarPanel.UpdateTheme();
+            if (_imageGeneratorForm != null && !_imageGeneratorForm.IsDisposed)
+                ThemeColors.ApplyToControlTree(_imageGeneratorForm);
+            if (_forumForm != null && !_forumForm.IsDisposed)
+                ThemeColors.ApplyToControlTree(_forumForm);
         }
 
         private void LoadSavedModelsFolder()
@@ -1765,11 +1771,17 @@ namespace LocalAIApp
             {
                 if (settingsForm.ShowDialog(this) == DialogResult.OK)
                 {
+                    var themeChanged = _appSettings.DarkMode != settingsForm.Settings.DarkMode;
                     var searchModeChanged =
                         _appSettings.SearchAllDrivesForModels != settingsForm.Settings.SearchAllDrivesForModels ||
                         !string.Equals(_appSettings.DefaultTextModelPath, settingsForm.Settings.DefaultTextModelPath, StringComparison.OrdinalIgnoreCase);
                     _appSettings = settingsForm.Settings;
                     SaveAppSettings();
+                    if (themeChanged)
+                    {
+                        ThemeColors.SetDarkMode(_appSettings.DarkMode);
+                        UpdateTheme();
+                    }
                     _statusBar.SetStatus("Parametres sauvegardes", StatusType.Success);
                     if (searchModeChanged)
                         ScanModelsFolder();
@@ -2435,6 +2447,7 @@ namespace LocalAIApp
         public bool EnableSubagents { get; set; } = false;
         public bool SearchAllDrivesForModels { get; set; } = false;
         public bool AutoUpdateEnabled { get; set; } = true;
+        public bool DarkMode { get; set; } = false;
         public string CodeWorkspace { get; set; } = DefaultCodeWorkspace;
         public float Temperature { get; set; } = 0.7f;
         public float TopP { get; set; } = 0.9f;
@@ -2537,26 +2550,137 @@ namespace LocalAIApp
     // ===== THEME =====
     public static class ThemeColors
     {
-        public static readonly Color Background = Color.FromArgb(0xF5, 0xF6, 0xF8);
-        public static readonly Color Surface = Color.FromArgb(0xFF, 0xFF, 0xFF);
-        public static readonly Color SurfaceHover = Color.FromArgb(0xF8, 0xF9, 0xFC);
-        public static readonly Color Border = Color.FromArgb(0xE5, 0xE8, 0xEE);
-        public static readonly Color BorderLight = Color.FromArgb(0xD9, 0xDD, 0xE6);
-        public static readonly Color Primary = Color.FromArgb(0x59, 0x67, 0xDC);
-        public static readonly Color PrimaryHover = Color.FromArgb(0x4B, 0x58, 0xCB);
-        public static readonly Color PrimaryPressed = Color.FromArgb(0x40, 0x4C, 0xB4);
-        public static readonly Color Success = Color.FromArgb(0x23, 0x85, 0x5B);
-        public static readonly Color Warning = Color.FromArgb(0xA2, 0x74, 0x19);
-        public static readonly Color Error = Color.FromArgb(0xB7, 0x49, 0x43);
-        public static readonly Color TextPrimary = Color.FromArgb(0x20, 0x24, 0x31);
-        public static readonly Color TextSecondary = Color.FromArgb(0x55, 0x5D, 0x6D);
-        public static readonly Color TextMuted = Color.FromArgb(0x73, 0x79, 0x89);
-        public static readonly Color Thinking = Color.FromArgb(0x85, 0x8B, 0x99);
-        public static readonly Color UserBubble = Color.FromArgb(0xF1, 0xF3, 0xF7);
-        public static readonly Color AssistantBubble = Color.FromArgb(0xFF, 0xFF, 0xFF);
-        public static readonly Color CodeBackground = Color.FromArgb(0xF8, 0xF9, 0xFB);
-        public static readonly Color ScrollBar = Color.FromArgb(0xD5, 0xD9, 0xE1);
-        public static readonly Color ScrollBarHover = Color.FromArgb(0xB9, 0xBF, 0xCA);
+        private static bool _darkMode;
+
+        private static readonly (Color Light, Color Dark)[] PalettePairs =
+        {
+            (Color.FromArgb(0xF5, 0xF6, 0xF8), Color.FromArgb(0x1B, 0x1D, 0x24)),
+            (Color.FromArgb(0xFF, 0xFF, 0xFF), Color.FromArgb(0x22, 0x25, 0x2D)),
+            (Color.FromArgb(0xF8, 0xF9, 0xFC), Color.FromArgb(0x2A, 0x2E, 0x38)),
+            (Color.FromArgb(0xE5, 0xE8, 0xEE), Color.FromArgb(0x39, 0x3E, 0x49)),
+            (Color.FromArgb(0xD9, 0xDD, 0xE6), Color.FromArgb(0x42, 0x48, 0x55)),
+            (Color.FromArgb(0x59, 0x67, 0xDC), Color.FromArgb(0x7C, 0x89, 0xFF)),
+            (Color.FromArgb(0x4B, 0x58, 0xCB), Color.FromArgb(0x8C, 0x97, 0xFF)),
+            (Color.FromArgb(0x40, 0x4C, 0xB4), Color.FromArgb(0x65, 0x73, 0xEF)),
+            (Color.FromArgb(0x23, 0x85, 0x5B), Color.FromArgb(0x3C, 0xB4, 0x85)),
+            (Color.FromArgb(0xA2, 0x74, 0x19), Color.FromArgb(0xE2, 0xB2, 0x57)),
+            (Color.FromArgb(0xB7, 0x49, 0x43), Color.FromArgb(0xEB, 0x78, 0x74)),
+            (Color.FromArgb(0x20, 0x24, 0x31), Color.FromArgb(0xEA, 0xED, 0xF4)),
+            (Color.FromArgb(0x55, 0x5D, 0x6D), Color.FromArgb(0xB8, 0xBF, 0xCC)),
+            (Color.FromArgb(0x73, 0x79, 0x89), Color.FromArgb(0x91, 0x99, 0xA8)),
+            (Color.FromArgb(0x85, 0x8B, 0x99), Color.FromArgb(0x9B, 0xA3, 0xB2)),
+            (Color.FromArgb(0xF1, 0xF3, 0xF7), Color.FromArgb(0x2B, 0x30, 0x3B)),
+            (Color.FromArgb(0xF8, 0xF9, 0xFB), Color.FromArgb(0x19, 0x1C, 0x23)),
+            (Color.FromArgb(0xD5, 0xD9, 0xE1), Color.FromArgb(0x39, 0x3E, 0x49)),
+            (Color.FromArgb(0xB9, 0xBF, 0xCA), Color.FromArgb(0x52, 0x59, 0x67))
+        };
+
+        public static bool IsDarkMode => _darkMode;
+        public static Color Background => _darkMode ? Color.FromArgb(0x1B, 0x1D, 0x24) : Color.FromArgb(0xF5, 0xF6, 0xF8);
+        public static Color Surface => _darkMode ? Color.FromArgb(0x22, 0x25, 0x2D) : Color.FromArgb(0xFF, 0xFF, 0xFF);
+        public static Color SurfaceHover => _darkMode ? Color.FromArgb(0x2A, 0x2E, 0x38) : Color.FromArgb(0xF8, 0xF9, 0xFC);
+        public static Color Border => _darkMode ? Color.FromArgb(0x39, 0x3E, 0x49) : Color.FromArgb(0xE5, 0xE8, 0xEE);
+        public static Color BorderLight => _darkMode ? Color.FromArgb(0x42, 0x48, 0x55) : Color.FromArgb(0xD9, 0xDD, 0xE6);
+        public static Color Primary => _darkMode ? Color.FromArgb(0x7C, 0x89, 0xFF) : Color.FromArgb(0x59, 0x67, 0xDC);
+        public static Color PrimaryHover => _darkMode ? Color.FromArgb(0x8C, 0x97, 0xFF) : Color.FromArgb(0x4B, 0x58, 0xCB);
+        public static Color PrimaryPressed => _darkMode ? Color.FromArgb(0x65, 0x73, 0xEF) : Color.FromArgb(0x40, 0x4C, 0xB4);
+        public static Color Success => _darkMode ? Color.FromArgb(0x3C, 0xB4, 0x85) : Color.FromArgb(0x23, 0x85, 0x5B);
+        public static Color Warning => _darkMode ? Color.FromArgb(0xE2, 0xB2, 0x57) : Color.FromArgb(0xA2, 0x74, 0x19);
+        public static Color Error => _darkMode ? Color.FromArgb(0xEB, 0x78, 0x74) : Color.FromArgb(0xB7, 0x49, 0x43);
+        public static Color TextPrimary => _darkMode ? Color.FromArgb(0xEA, 0xED, 0xF4) : Color.FromArgb(0x20, 0x24, 0x31);
+        public static Color TextSecondary => _darkMode ? Color.FromArgb(0xB8, 0xBF, 0xCC) : Color.FromArgb(0x55, 0x5D, 0x6D);
+        public static Color TextMuted => _darkMode ? Color.FromArgb(0x91, 0x99, 0xA8) : Color.FromArgb(0x73, 0x79, 0x89);
+        public static Color Thinking => _darkMode ? Color.FromArgb(0x9B, 0xA3, 0xB2) : Color.FromArgb(0x85, 0x8B, 0x99);
+        public static Color UserBubble => _darkMode ? Color.FromArgb(0x2B, 0x30, 0x3B) : Color.FromArgb(0xF1, 0xF3, 0xF7);
+        public static Color AssistantBubble => Surface;
+        public static Color CodeBackground => _darkMode ? Color.FromArgb(0x19, 0x1C, 0x23) : Color.FromArgb(0xF8, 0xF9, 0xFB);
+        public static Color ScrollBar => _darkMode ? Color.FromArgb(0x39, 0x3E, 0x49) : Color.FromArgb(0xD5, 0xD9, 0xE1);
+        public static Color ScrollBarHover => _darkMode ? Color.FromArgb(0x52, 0x59, 0x67) : Color.FromArgb(0xB9, 0xBF, 0xCA);
+
+        public static void SetDarkMode(bool enabled) => _darkMode = enabled;
+
+        private static Color MapPaletteColor(Color color)
+        {
+            foreach (var pair in PalettePairs)
+            {
+                var source = _darkMode ? pair.Light : pair.Dark;
+                if (color.ToArgb() == source.ToArgb())
+                    return _darkMode ? pair.Dark : pair.Light;
+            }
+            return color;
+        }
+
+        private static Color MapBackColor(Color color)
+        {
+            if (color.IsEmpty || color.A == 0)
+                return color;
+            var mapped = MapPaletteColor(color);
+            if (mapped.ToArgb() != color.ToArgb())
+                return mapped;
+            if (_darkMode)
+            {
+                if (color.ToArgb() == SystemColors.Control.ToArgb()) return Background;
+                if (color.ToArgb() == SystemColors.Window.ToArgb()) return CodeBackground;
+                if (color.ToArgb() == Color.Black.ToArgb()) return Background;
+            }
+            return color;
+        }
+
+        private static Color MapForeColor(Color color)
+        {
+            if (color.IsEmpty || color.A == 0 || color.ToArgb() == Color.White.ToArgb())
+                return color;
+            var mapped = MapPaletteColor(color);
+            if (mapped.ToArgb() != color.ToArgb())
+                return mapped;
+            if (_darkMode)
+            {
+                if (color.ToArgb() == SystemColors.ControlText.ToArgb()
+                    || color.ToArgb() == SystemColors.WindowText.ToArgb()
+                    || color.ToArgb() == Color.Black.ToArgb()) return TextPrimary;
+                if (color.ToArgb() == SystemColors.GrayText.ToArgb()) return TextMuted;
+            }
+            return color;
+        }
+
+        public static void ApplyToControlTree(Control root)
+        {
+            if (root == null)
+                return;
+            ApplyControl(root);
+        }
+
+        private static void ApplyControl(Control control)
+        {
+            control.BackColor = MapBackColor(control.BackColor);
+            control.ForeColor = MapForeColor(control.ForeColor);
+            if (control is RoundedPanel rounded)
+                rounded.BorderColor = MapPaletteColor(rounded.BorderColor);
+            if (control is ModernButton button)
+            {
+                button.BackColorNormal = MapPaletteColor(button.BackColorNormal);
+                button.BackColorHover = MapPaletteColor(button.BackColorHover);
+                button.BackColorPressed = MapPaletteColor(button.BackColorPressed);
+                if (!button.TextColor.IsEmpty)
+                    button.TextColor = MapForeColor(button.TextColor);
+            }
+            if (control is ToolStrip strip)
+                ApplyToolStripItems(strip.Items);
+            foreach (Control child in control.Controls)
+                ApplyControl(child);
+            control.Invalidate();
+        }
+
+        private static void ApplyToolStripItems(ToolStripItemCollection items)
+        {
+            foreach (ToolStripItem item in items)
+            {
+                item.BackColor = MapBackColor(item.BackColor);
+                item.ForeColor = MapForeColor(item.ForeColor);
+                if (item is ToolStripDropDownItem dropDown)
+                    ApplyToolStripItems(dropDown.DropDownItems);
+            }
+        }
     }
 
     // ===== BASE CONTROLS WITH DOUBLE BUFFERING =====
@@ -3966,6 +4090,7 @@ namespace LocalAIApp
         private CheckBox _subagentsEnabledCheckBox = null!;
         private CheckBox _autoUpdateCheckBox = null!;
         private CheckBox _searchAllModelDrivesCheckBox = null!;
+        private CheckBox _darkModeCheckBox = null!;
         private CheckBox _ssdModelMemoryCheckBox = null!;
         private ModernTextBox _codeWorkspaceTextBox = null!;
         private ComboBox _reasoningEffortComboBox = null!;
@@ -4004,6 +4129,7 @@ namespace LocalAIApp
                 EnableForum = currentSettings.EnableForum,
                 EnableSubagents = currentSettings.EnableSubagents,
                 AutoUpdateEnabled = currentSettings.AutoUpdateEnabled,
+                DarkMode = currentSettings.DarkMode,
                 CodeWorkspace = string.IsNullOrWhiteSpace(currentSettings.CodeWorkspace)
                     ? AppSettings.DefaultCodeWorkspace
                     : currentSettings.CodeWorkspace,
@@ -4028,6 +4154,7 @@ namespace LocalAIApp
             };
 
             InitializeComponent();
+            ThemeColors.ApplyToControlTree(this);
             LoadSettings();
         }
 
@@ -4078,6 +4205,20 @@ namespace LocalAIApp
                 BackColor = ThemeColors.Background,
                 ForeColor = ThemeColors.TextPrimary
             };
+
+            AddSection(content, "APPARENCE");
+            _darkModeCheckBox = new CheckBox
+            {
+                Text = "Activé",
+                AutoSize = true,
+                ForeColor = ThemeColors.TextPrimary,
+                BackColor = ThemeColors.Surface,
+                FlatStyle = FlatStyle.Flat
+            };
+            content.Controls.Add(CreateSettingCard(
+                "Mode sombre",
+                "Utilise une palette sombre dans le chat, les panneaux et les fenêtres de l’application.",
+                _darkModeCheckBox));
 
             AddSection(content, "MODÈLES PAR DÉFAUT");
             _defaultTextModelPathTextBox = CreateModelPathTextBox();
@@ -4598,6 +4739,7 @@ namespace LocalAIApp
             _forumEnabledCheckBox.Checked = Settings.EnableForum;
             _subagentsEnabledCheckBox.Checked = Settings.EnableSubagents;
             _autoUpdateCheckBox.Checked = Settings.AutoUpdateEnabled;
+            _darkModeCheckBox.Checked = Settings.DarkMode;
             _codeWorkspaceTextBox.Text = Settings.CodeWorkspace ?? AppSettings.DefaultCodeWorkspace;
             _stopSequencesTextBox.Text = Settings.StopSequences ?? "";
             SetNumericValue(_temperatureUpDown, (decimal)Settings.Temperature);
@@ -4635,6 +4777,7 @@ namespace LocalAIApp
             Settings.EnableForum = _forumEnabledCheckBox.Checked;
             Settings.EnableSubagents = _subagentsEnabledCheckBox.Checked;
             Settings.AutoUpdateEnabled = _autoUpdateCheckBox.Checked;
+            Settings.DarkMode = _darkModeCheckBox.Checked;
             Settings.CodeWorkspace = string.IsNullOrWhiteSpace(_codeWorkspaceTextBox.Text)
                 ? AppSettings.DefaultCodeWorkspace
                 : _codeWorkspaceTextBox.Text.Trim();

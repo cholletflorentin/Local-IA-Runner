@@ -92,8 +92,11 @@ public sealed class ChatPanel : DoubleBufferedPanel
 
     public void UpdateTheme()
     {
-        BackColor = Color.White;
-        _fallbackPanel.BackColor = Color.White;
+        BackColor = ThemeColors.Background;
+        _fallbackPanel.BackColor = ThemeColors.Background;
+        _fallbackLabel.ForeColor = ThemeColors.TextSecondary;
+        _runtimeLink.LinkColor = ThemeColors.Primary;
+        RunScript($"window.localIA?.setTheme({ToJson(ThemeColors.IsDarkMode ? "dark" : "light")});");
     }
 
     public void Clear()
@@ -368,6 +371,7 @@ public sealed class ChatPanel : DoubleBufferedPanel
         }
 
         _documentReady = true;
+        RunScript($"window.localIA?.setTheme({ToJson(ThemeColors.IsDarkMode ? "dark" : "light")});");
         RunScript($"window.localIA?.setHeader({ToJson(_title)}, {ToJson(_modelName)});");
         RenderAll(forceBottom: true);
     }

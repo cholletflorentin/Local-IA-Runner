@@ -57,7 +57,10 @@ Les modèles d'images (`.safetensors`, `.gguf`, `.sft`, `.ckpt`, `.pt`, `.pth` e
 
 Dans **Outils / Paramètres / Modèles par défaut**, tu peux choisir le fichier GGUF utilisé au démarrage et le fichier du modèle d'image à privilégier. Pour l'image, place le fichier dans une catégorie reconnue sous le dossier stable-diffusion.cpp; à l'analyse, l'application choisit un profil compatible et présélectionne ce fichier dans son composant.
 
+Dans **Outils / Paramètres / Apparence**, active **Mode sombre** pour appliquer la palette sombre au chat et aux fenêtres de l'application. Le choix est enregistré avec les autres paramètres et désactivé par défaut.
+
 ## Appels d'outils par les modèles
+
 
 Les outils web, code et génération d'images sont décrits dans les consignes système ajoutées au modèle pour chaque requête. `list_local_models` est toujours disponible : il retourne les modèles de texte GGUF détectés, leur nom et leur chemin exact. Il peut servir à choisir un modèle pour un sous-agent. Si un modèle d'image par défaut est défini dans **Outils / Paramètres / Modèles par défaut**, le modèle de texte peut appeler `generate_image` : il rédige le prompt positif et négatif et choisit les dimensions, étapes, guidage et graine. Le backend sélectionne le profil compatible avec le modèle par défaut, enregistre l'image dans `Pictures\LocalIARunner` et ajoute un lien pour l'ouvrir. Sans modèle d'image par défaut, cet outil n'est pas proposé.
 
