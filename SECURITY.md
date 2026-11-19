@@ -13,6 +13,6 @@ currently being supported with security updates.
 
 ## Reporting a Vulnerability
 
-< 1.20.x no update services
-1.0.37 and 1.0.38 is borken
+< 1.20.x no update services                                                                              
+1.0.47 and 1.0.48 is borken                                                                                          
 1.0.20 : update system is borken
