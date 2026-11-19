@@ -3147,7 +3147,8 @@ class LlamaCppBackend:
             if connection is not None:
                 self._clear_request_connection(connection)
 
-    def _stream_tool_completion(self, messages, suppress_output=False):
+    def _stream_tool_completion(self, messages, suppress_output=False,
+                                activity_id=None, activity_model=None):
         connection = None
         visible_parts = []
         output_buffer = ""
@@ -3162,12 +3163,26 @@ class LlamaCppBackend:
         cancelled = False
         error = None
 
+        def send_subagent_activity(kind, content=""):
+            if not activity_id:
+                return
+            self.send({
+                "type": "subagent_activity",
+                "activity_session_id": getattr(self, "_subagent_session_id", ""),
+                "activity_id": activity_id,
+                "activity_kind": kind,
+                "model": activity_model or "",
+                "content": content
+            })
+
         def emit(content):
             nonlocal stream_started
             if not content:
                 return
             visible_parts.append(content)
-            if not suppress_output:
+            if activity_id:
+                stream_started = True
+            elif not suppress_output:
                 if not stream_started:
                     self.send({"type": "stream_start"})
                     stream_started = True
@@ -3177,7 +3192,7 @@ class LlamaCppBackend:
 
         def collected_content():
             content = "".join(visible_parts)
-            if self._has_thinking_markup(content):
+            if activity_id or self._has_thinking_markup(content):
                 return content
             return self._thinking_markup("".join(reasoning_buffer)) + content
 
@@ -3342,19 +3357,34 @@ class LlamaCppBackend:
                     # decides whether the model produced a valid invocation.
                     # Report generated chunks separately so the UI's speed
                     # counter includes that work as well as visible text.
-                    self.send({"type": "generation_token"})
+                    if activity_id:
+                        send_subagent_activity("thinking", reasoning)
+                    else:
+                        self.send({"type": "generation_token"})
                     if self._has_thinking_markup(content):
                         if reasoning_buffer:
-                            self.send({"type": "thinking_clear"})
+                            if activity_id:
+                                send_subagent_activity("clear_thinking")
+                            else:
+                                self.send({"type": "thinking_clear"})
                             reasoning_buffer.clear()
                     else:
                         reasoning_buffer.append(reasoning)
-                        self.send({"type": "thinking_token", "content": reasoning})
+                        if not activity_id:
+                            self.send({"type": "thinking_token", "content": reasoning})
 
                 if content:
-                    self.send({"type": "generation_token"})
+                    if activity_id:
+                        # Keep tool-call syntax visible in the separate activity
+                        # window even while the parser buffers it for validation.
+                        send_subagent_activity("generated", content)
+                    else:
+                        self.send({"type": "generation_token"})
                     if self._has_thinking_markup(content) and reasoning_buffer:
-                        self.send({"type": "thinking_clear"})
+                        if activity_id:
+                            send_subagent_activity("clear_thinking")
+                        else:
+                            self.send({"type": "thinking_clear"})
                         reasoning_buffer.clear()
                     process_content(content)
                     if tool_response_boundary_seen:
@@ -3739,12 +3769,25 @@ class LlamaCppBackend:
         context_size = model_settings.get("context_size", 4096)
         use_mmap = model_settings.get("use_mmap", False)
         model_name = Path(model_path).stem
-        self.send({"type": "tool_status", "content": f"Sous-agent {model_name} : chargement du modèle…"})
+        activity_id = uuid.uuid4().hex
+
+        def report_activity(kind, content=""):
+            self.send({
+                "type": "subagent_activity",
+                "activity_session_id": getattr(self, "_subagent_session_id", ""),
+                "activity_id": activity_id,
+                "activity_kind": kind,
+                "model": model_name,
+                "content": str(content or "")
+            })
+
+        report_activity("start", prompt)
+        report_activity("status", "Chargement du modèle…")
         final_result = ""
         restore_error = None
         try:
             if self._cancel_requested.is_set():
-                return "Sous-agent annulé."
+                raise InterruptedError("Le sous-agent a été annulé avant le chargement du modèle.")
             if not self.load_model(model_path, ngl=ngl, threads=threads,
                                    context_size=context_size, use_mmap=use_mmap):
                 raise RuntimeError("Impossible de charger le modèle du sous-agent.")
@@ -3785,15 +3828,15 @@ class LlamaCppBackend:
                     tool_call = pending_tool_calls.pop(0)
                 else:
                     self._trim_tool_messages_to_context(messages, task_message)
-                    content = self._request_tool_completion(messages)
-                    response_prefix = self._first_tool_response_prefix(content)
-                    if response_prefix is not None:
-                        content = response_prefix
-                    parsed_tool_calls = self._parse_tool_calls(content)
-                    if not parsed_tool_calls:
-                        detected_type, _ = self._detect_tool_call_start(content)
-                        if detected_type in ("tool", "prefix", "wrapped"):
-                            parsed_tool_calls = [{"name": "__invalid_tool_call__", "arguments": {}}]
+                    content, parsed_tool_calls, cancelled, error, _ = self._stream_tool_completion(
+                        messages,
+                        activity_id=activity_id,
+                        activity_model=model_name
+                    )
+                    if error:
+                        raise RuntimeError(error)
+                    if cancelled or self._cancel_requested.is_set():
+                        break
                     tool_call = parsed_tool_calls[0] if parsed_tool_calls else None
                     if len(parsed_tool_calls) > 1:
                         pending_tool_calls.extend(parsed_tool_calls[1:])
@@ -3808,7 +3851,7 @@ class LlamaCppBackend:
                                 "puis appelle goal_met avec le résultat final."
                             )
                         })
-                        self.send({"type": "tool_status", "content": f"Sous-agent {model_name} : reprise automatique…"})
+                        report_activity("status", "Travail intermédiaire; le sous-agent poursuit son objectif…")
                         continue
                     final_result = content.strip()
                     break
@@ -3822,6 +3865,7 @@ class LlamaCppBackend:
                     raise RuntimeError(f"Le sous-agent a atteint la limite de {MAX_SUBAGENT_TOOL_CALLS} appels d'outils.")
 
                 serialized_call = json.dumps(tool_call, ensure_ascii=False)
+                report_activity("tool_start", f"Exécution de l’outil {tool_name}…")
                 if tool_name == "web_search":
                     self._trim_tool_messages_to_context(
                         messages,
@@ -3845,6 +3889,7 @@ class LlamaCppBackend:
                     )
                     result = tool_result.get("text", "") if isinstance(tool_result, dict) else tool_result
                 result = self._fit_tool_result_to_context(result, messages, serialized_call, tool_name)
+                report_activity("tool_result", str(result)[:MAX_TOOL_TEXT_CHARS])
                 messages.append({
                     "role": "assistant",
                     "content": TOOL_CALL_OPEN + serialized_call + TOOL_CALL_CLOSE
@@ -3857,6 +3902,8 @@ class LlamaCppBackend:
                     )
                 })
                 tool_count += 1
+            if final_result and not self._cancel_requested.is_set():
+                report_activity("final", final_result)
         except Exception as exception:
             if self._cancel_requested.is_set():
                 final_result = ""
@@ -3864,6 +3911,7 @@ class LlamaCppBackend:
                 final_result = f"Erreur du sous-agent {model_name} : {exception}"
         finally:
             if main_model_path and not self._cancel_requested.is_set():
+                report_activity("status", "Restauration du modèle contrôleur…")
                 try:
                     if not self.load_model(main_model_path, ngl=ngl, threads=threads,
                                            context_size=context_size, use_mmap=use_mmap):
@@ -3872,15 +3920,23 @@ class LlamaCppBackend:
                     restore_error = f"Impossible de recharger le modèle contrôleur : {exception}"
 
         if self._cancel_requested.is_set():
+            report_activity("cancelled", "Le sous-agent a été annulé.")
             return "Le sous-agent a été annulé."
         if restore_error:
+            report_activity("error", restore_error)
             return restore_error
         if final_result and not final_result.startswith("Erreur du sous-agent"):
             try:
-                return self._post_subagent_result(model_path, prompt, final_result)
+                report = self._post_subagent_result(model_path, prompt, final_result)
+                report_activity("complete", "Rapport terminé et ajouté au forum temporaire.")
+                return report
             except Exception as exception:
-                return f"Le sous-agent a terminé, mais son rapport n'a pas pu être enregistré : {exception}\n\n{final_result}"
-        return final_result or f"Le sous-agent {model_name} n'a fourni aucun résultat."
+                report_error = f"Le sous-agent a terminé, mais son rapport n'a pas pu être enregistré : {exception}\n\n{final_result}"
+                report_activity("error", report_error)
+                return report_error
+        final_result = final_result or f"Le sous-agent {model_name} n'a fourni aucun résultat."
+        report_activity("error" if final_result.startswith("Erreur du sous-agent") else "complete", final_result)
+        return final_result
 
     def _tool_context_char_budget(self):
         params = getattr(self, "_gen_params", {})

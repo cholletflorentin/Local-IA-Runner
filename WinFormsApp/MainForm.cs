@@ -77,6 +77,7 @@ namespace LocalAIApp
         private ModernMenuStrip _menuStrip;
         private ImageGeneratorForm _imageGeneratorForm;
         private ForumForm? _forumForm;
+        private SubagentActivityForm? _subagentActivityForm;
 
         public MainForm()
         {
@@ -199,6 +200,7 @@ namespace LocalAIApp
             _menuStrip.SettingsClicked += OnSettings;
             _menuStrip.ImageGeneratorClicked += OnOpenImageGenerator;
             _menuStrip.ForumClicked += OnOpenForum;
+            _menuStrip.SubagentActivityClicked += OnOpenSubagentActivity;
             _menuStrip.CheckForUpdatesClicked += OnCheckForUpdates;
             _menuStrip.ExitClicked += (s, e) => Application.Exit();
             this.Controls.Add(_menuStrip);
@@ -240,6 +242,8 @@ namespace LocalAIApp
                 ThemeColors.ApplyToControlTree(_imageGeneratorForm);
             if (_forumForm != null && !_forumForm.IsDisposed)
                 ThemeColors.ApplyToControlTree(_forumForm);
+            if (_subagentActivityForm != null && !_subagentActivityForm.IsDisposed)
+                ThemeColors.ApplyToControlTree(_subagentActivityForm);
         }
 
         private void LoadSavedModelsFolder()
@@ -1212,6 +1216,16 @@ namespace LocalAIApp
                             _chatPanel.AppendToolStatusToThinking(toolStatus);
                             break;
                         }
+                        case "subagent_activity":
+                            if (string.Equals(msg.ActivityKind, "start", StringComparison.Ordinal))
+                                ShowSubagentActivity(activate: false);
+                            _subagentActivityForm?.AppendActivity(
+                                msg.ActivitySessionId,
+                                msg.ActivityId,
+                                msg.Model,
+                                msg.ActivityKind,
+                                msg.Content ?? "");
+                            break;
                         case "thinking_token":
                             MarkGenerationProgress();
                             if (!string.IsNullOrEmpty(msg.Content))
@@ -2099,6 +2113,27 @@ namespace LocalAIApp
             _forumForm.Show(this);
         }
 
+        private void OnOpenSubagentActivity(object sender, EventArgs e) =>
+            ShowSubagentActivity(activate: true);
+
+        private void ShowSubagentActivity(bool activate)
+        {
+            if (_subagentActivityForm == null || _subagentActivityForm.IsDisposed)
+            {
+                _subagentActivityForm = new SubagentActivityForm();
+                _subagentActivityForm.FormClosed += (s, e) =>
+                {
+                    if (ReferenceEquals(_subagentActivityForm, s))
+                        _subagentActivityForm = null;
+                };
+            }
+
+            if (!_subagentActivityForm.Visible)
+                _subagentActivityForm.Show(this);
+            if (activate)
+                _subagentActivityForm.Activate();
+        }
+
         private void SendImageBackendRequest(object request)
         {
             var json = JsonConvert.SerializeObject(request);
@@ -2570,6 +2605,7 @@ namespace LocalAIApp
                 try { _pythonProcess.Kill(entireProcessTree: true); }
                 catch { }
             }
+            _subagentActivityForm?.CloseForApplicationExit();
             base.OnFormClosing(e);
         }
 
@@ -2756,6 +2792,12 @@ namespace LocalAIApp
         [JsonProperty("wait_for_apply")]
         public bool WaitForApply { get; set; }
         public string Model { get; set; }
+        [JsonProperty("activity_session_id")]
+        public string ActivitySessionId { get; set; } = "";
+        [JsonProperty("activity_id")]
+        public string ActivityId { get; set; } = "";
+        [JsonProperty("activity_kind")]
+        public string ActivityKind { get; set; } = "";
         public bool Cancelled { get; set; }
         public string Error { get; set; }
         public JArray Recipes { get; set; }
@@ -4372,6 +4414,7 @@ namespace LocalAIApp
         public event EventHandler SettingsClicked;
         public event EventHandler ImageGeneratorClicked;
         public event EventHandler? ForumClicked;
+        public event EventHandler? SubagentActivityClicked;
         public event EventHandler CheckForUpdatesClicked;
 
         public ModernMenuStrip()
@@ -4398,6 +4441,7 @@ namespace LocalAIApp
             toolsMenu.DropDownItems.Add(new ToolStripSeparator());
             toolsMenu.DropDownItems.Add(CreateItem("Générer une image…", null, (s, e) => ImageGeneratorClicked?.Invoke(this, e)));
             toolsMenu.DropDownItems.Add(CreateItem("Forum des IA…", null, (s, e) => ForumClicked?.Invoke(this, e)));
+            toolsMenu.DropDownItems.Add(CreateItem("Activité des sous-agents…", null, (s, e) => SubagentActivityClicked?.Invoke(this, e)));
             toolsMenu.DropDownItems.Add(CreateItem("Parametres...", "Ctrl+P", (s, e) => SettingsClicked?.Invoke(this, e)));
             toolsMenu.DropDownItems.Add(new ToolStripSeparator());
             toolsMenu.DropDownItems.Add(CreateItem("Vérifier les mises à jour…", null, (s, e) => CheckForUpdatesClicked?.Invoke(this, e)));
