@@ -1214,13 +1214,27 @@ namespace LocalAIApp
                             break;
                         case "stream_end":
                             System.Diagnostics.Debug.WriteLine($"[C# stream_end] Before EndStreamingMessage, isGenerating={_isGenerating}");
-                            Log("stream_end received");
+                            var generationTimedOut = _generationTimedOut;
                             _generationWatchdog?.Dispose();
                             _streamRenderTimer.Stop();
-                            FlushPendingStreamingTokens();
-                            Log("stream tokens flushed");
+                            try
+                            {
+                                FlushPendingStreamingTokens();
+                            }
+                            catch (Exception flushException)
+                            {
+                                ClearPendingStreamingTokens();
+                                LogException("Affichage des derniers jetons", flushException);
+                            }
+
+                            // A stream_end is terminal even if WebView rendering fails.
+                            // Unlock the composer before finalizing the visual message.
+                            _isGenerating = false;
                             _isStreamingResponse = false;
-                            var generationTimedOut = _generationTimedOut;
+                            _isCancellingGeneration = false;
+                            _generationTimedOut = false;
+                            _inputPanel.SetGenerating(false);
+                            Log("stream_end received; send controls restored");
                             try {
                                 Log("finalizing streamed message");
                                 _chatPanel.EndStreamingMessage(msg.Content ?? "");
@@ -1239,10 +1253,6 @@ namespace LocalAIApp
                                     _chatPanel.RenderMessages(_currentConversation);
                                     SaveConversation();
                                 }
-                                _isGenerating = false;
-                                _isCancellingGeneration = false;
-                                _inputPanel.SetGenerating(false);
-                                Log("send controls restored");
                                 if (!string.IsNullOrWhiteSpace(msg.Error))
                                 {
                                     _statusBar.SetStatus("Erreur: " + msg.Error, StatusType.Error);
@@ -1260,13 +1270,9 @@ namespace LocalAIApp
                                 {
                                     _statusBar.SetStatus("Pret", StatusType.Success);
                                 }
-                                _generationTimedOut = false;
                                 System.Diagnostics.Debug.WriteLine($"[C# stream_end] Flags reset, isGenerating={_isGenerating}");
                             } catch (Exception ex) {
                                 System.Diagnostics.Debug.WriteLine($"[C# stream_end ERROR] {ex.Message}\n{ex.StackTrace}");
-                                _isGenerating = false;
-                                _isCancellingGeneration = false;
-                                _inputPanel.SetGenerating(false);
                                 _statusBar.SetStatus("Erreur stream_end", StatusType.Error);
                             }
                             ApplyPendingUpdateWhenIdle();
