@@ -7,10 +7,12 @@ currently being supported with security updates.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.20.x  | :white_check_mark: |
-| 1.17.x  | :x:                |
+| 1.0.30  | :white_check_mark: |
+| 1.0.20  | :x:                |
 | < 1.0   | :x:                |
 
 ## Reporting a Vulnerability
 
 < 1.20.x no update services
+1.0.37 and 1.0.38 is borken
+1.0.20 : update system is borken
