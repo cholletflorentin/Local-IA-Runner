@@ -1,19 +1,19 @@
 {
-  "tag_name": "v1.0.52",
-  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.52",
-  "body": "## Nouveautés de Local IA Runner 1.0.52\r\n\r\n- Compter le débit pendant les appels d'outils\r\n\r\n## Téléchargements\r\n\r\n- LocalIARunner-Setup-x64.exe : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.\r\n- LocalIARunner-Portable-x64-1.0.52.zip : version portable à extraire et lancer.\r\n\r\nLes modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.",
+  "tag_name": "v1.0.53",
+  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.53",
+  "body": "## Nouveautés de Local IA Runner 1.0.53\r\n\r\n### Annuler la génération d'image\n\n- Afficher l'état d'annulation et bloquer les clics répétés.\r\n- Préserver l'ordre des requêtes pour ne pas perdre une annulation immédiate.\r\n\r\n## Téléchargements\r\n\r\n- LocalIARunner-Setup-x64.exe : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.\r\n- LocalIARunner-Portable-x64-1.0.53.zip : version portable à extraire et lancer.\r\n\r\nLes modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.",
   "assets": [
     {
       "name": "LocalIARunner-Setup-x64.exe",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.52/LocalIARunner-Setup-x64.exe",
-      "digest": "sha256:57c2201911c1a8acca4e38d331356cf4ad71adcf5d78b02575de938fd4852524",
-      "size": 97454236
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.53/LocalIARunner-Setup-x64.exe",
+      "digest": "sha256:dd95af4c5e7a19e7540268a59954cb7ea7f392e1458421dfbb474f9f1e74720b",
+      "size": 97466907
     },
     {
-      "name": "LocalIARunner-Portable-x64-1.0.52.zip",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.52/LocalIARunner-Portable-x64-1.0.52.zip",
-      "digest": "sha256:a48aefb2129a47ab47d9107cbbae91a15812fcc14f2ddd5c5fa1859b13d62dc8",
-      "size": 140878418
+      "name": "LocalIARunner-Portable-x64-1.0.53.zip",
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.53/LocalIARunner-Portable-x64-1.0.53.zip",
+      "digest": "sha256:05a0717da3e548322eca1ea0e6759a3ac72bcef3085948fe64bbe7b053307e43",
+      "size": 140878617
     }
   ]
 }
