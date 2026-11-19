@@ -48,6 +48,8 @@ namespace LocalAIApp
         private string _streamingConversationTitleId = "";
         private AppSettings _appSettings = new AppSettings();
         private readonly object _pythonInputLock = new object();
+        private readonly object _pythonWriteQueueLock = new();
+        private Task _pythonWriteQueue = Task.CompletedTask;
         
         // Watchdog pour détecter génération bloquée
         private System.Threading.Timer _generationWatchdog;
@@ -1751,36 +1753,24 @@ namespace LocalAIApp
                 var json = JsonConvert.SerializeObject(request);
                 System.Diagnostics.Debug.WriteLine($"[C# Send] {json}");
                 
-                // Write async to avoid blocking UI thread if pipe is full
-                Task.Run(() => 
+                // Preserve request order so an immediate cancellation follows
+                // the generation request instead of reaching Python first.
+                QueuePythonBackendWrite(json, ex =>
                 {
-                    System.Diagnostics.Debug.WriteLine($"[C# Send Task] Starting");
-                    try 
+                    System.Diagnostics.Debug.WriteLine($"[C# Send Task ERROR] {ex.Message}\n{ex.StackTrace}");
+                    if (IsDisposed || Disposing || !IsHandleCreated)
+                        return;
+                    BeginInvoke(new Action(() =>
                     {
-                        lock (_pythonInputLock)
-                        {
-                            if (_pythonInput == null || _pythonProcess == null || _pythonProcess.HasExited)
-                                throw new InvalidOperationException("Le backend Python n'est pas disponible.");
-                            _pythonInput.WriteLine(json);
-                            _pythonInput.Flush();
-                        }
-                        System.Diagnostics.Debug.WriteLine($"[C# Send Task] OK - wrote {json.Length} chars");
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[C# Send Task ERROR] {ex.Message}\n{ex.StackTrace}");
                         _generationWatchdog?.Dispose();
-                        Invoke(new Action(() => 
-                        {
-                            _isGenerating = false;
-                            _isStreamingResponse = false;
-                            _isCancellingGeneration = false;
-                            if (shouldGenerateConversationTitle)
-                                ForgetPendingConversationTitle(conversationId);
-                            _inputPanel.SetGenerating(false);
-                            _statusBar.SetStatus("Erreur envoi: " + ex.Message, StatusType.Error);
-                        }));
-                    }
+                        _isGenerating = false;
+                        _isStreamingResponse = false;
+                        _isCancellingGeneration = false;
+                        if (shouldGenerateConversationTitle)
+                            ForgetPendingConversationTitle(conversationId);
+                        _inputPanel.SetGenerating(false);
+                        _statusBar.SetStatus("Erreur envoi: " + ex.Message, StatusType.Error);
+                    }));
                 });
             }
             catch (Exception ex)
@@ -1811,22 +1801,9 @@ namespace LocalAIApp
             _inputPanel.SetCancelling(true);
             _statusBar.SetStatus(timedOut ? "Delai depasse, arret en cours..." : "Arret de la generation...", StatusType.Warning);
 
-            Task.Run(() =>
+            QueuePythonBackendWrite("{\"type\":\"cancel\"}", ex =>
             {
-                try
-                {
-                    lock (_pythonInputLock)
-                    {
-                        if (_pythonInput == null || _pythonProcess == null || _pythonProcess.HasExited)
-                            throw new InvalidOperationException("Le backend Python ne répond pas.");
-                        _pythonInput.WriteLine("{\"type\":\"cancel\"}");
-                        _pythonInput.Flush();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine("[Cancel generation] " + ex.Message);
-                }
+                System.Diagnostics.Debug.WriteLine("[Cancel generation] " + ex.Message);
             });
 
             _ = ForceStopBackendIfCancellationStallsAsync();
@@ -2125,31 +2102,47 @@ namespace LocalAIApp
         private void SendImageBackendRequest(object request)
         {
             var json = JsonConvert.SerializeObject(request);
-            Task.Run(() =>
+            QueuePythonBackendWrite(json, ex =>
             {
-                try
+                if (!IsDisposed && IsHandleCreated)
                 {
-                    lock (_pythonInputLock)
+                    BeginInvoke(new Action(() =>
                     {
-                        if (_pythonInput == null || _pythonProcess == null || _pythonProcess.HasExited)
-                            throw new InvalidOperationException("Le backend Python n'est pas disponible.");
-                        _pythonInput.WriteLine(json);
-                        _pythonInput.Flush();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    if (!IsDisposed && IsHandleCreated)
-                    {
-                        BeginInvoke(new Action(() =>
-                        {
-                            _imageGenerationActive = false;
-                            _imageGeneratorForm?.SetCompleted(new List<string>(), ex.Message, false);
-                            ApplyPendingUpdateWhenIdle();
-                        }));
-                    }
+                        _imageGenerationActive = false;
+                        _imageGeneratorForm?.SetCompleted(new List<string>(), ex.Message, false);
+                        ApplyPendingUpdateWhenIdle();
+                    }));
                 }
             });
+        }
+
+        private void QueuePythonBackendWrite(string json, Action<Exception>? onError = null)
+        {
+            lock (_pythonWriteQueueLock)
+            {
+                _pythonWriteQueue = _pythonWriteQueue.ContinueWith(_ =>
+                {
+                    try
+                    {
+                        lock (_pythonInputLock)
+                        {
+                            if (_pythonInput == null || _pythonProcess == null || _pythonProcess.HasExited)
+                                throw new InvalidOperationException("Le backend Python n'est pas disponible.");
+                            _pythonInput.WriteLine(json);
+                            _pythonInput.Flush();
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        try { onError?.Invoke(exception); }
+                        catch (Exception callbackException)
+                        {
+                            System.Diagnostics.Debug.WriteLine("[Backend request callback] " + callbackException.Message);
+                        }
+                    }
+                }, System.Threading.CancellationToken.None,
+                    TaskContinuationOptions.None, TaskScheduler.Default);
+            }
         }
 
         private static List<ChatAttachment> ImportGeneratedMedia(JArray? media)

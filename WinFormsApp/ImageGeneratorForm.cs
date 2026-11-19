@@ -117,6 +117,7 @@ namespace LocalAIApp
         private List<ImageRecipeInfo> _recipes = new();
         private bool _busy;
         private bool _catalogLoading;
+        private bool _cancellationRequested;
 
         public ImageGeneratorForm(string? defaultModelPath = null)
         {
@@ -283,7 +284,7 @@ namespace LocalAIApp
             _generateButton.Click += (s, e) => StartGeneration();
             _cancelButton = CreateButton("Annuler", 110);
             _cancelButton.Enabled = false;
-            _cancelButton.Click += (s, e) => CancelRequested?.Invoke(this, EventArgs.Empty);
+            _cancelButton.Click += (s, e) => RequestCancellation();
             actions.Controls.Add(_generateButton);
             actions.Controls.Add(_cancelButton);
             left.Controls.Add(actions);
@@ -340,7 +341,7 @@ namespace LocalAIApp
             FormClosing += (s, e) =>
             {
                 if (_busy)
-                    CancelRequested?.Invoke(this, EventArgs.Empty);
+                    RequestCancellation();
             };
             ThemeColors.ApplyToControlTree(this);
         }
@@ -708,9 +709,14 @@ namespace LocalAIApp
         public void SetGenerating(bool generating)
         {
             if (InvokeRequired) { BeginInvoke(new Action(() => SetGenerating(generating))); return; }
+            if (generating && !_busy)
+                _cancellationRequested = false;
+            else if (!generating)
+                _cancellationRequested = false;
             _busy = generating;
             _generateButton.Enabled = !generating && !_catalogLoading && _recipeBox.SelectedItem != null;
-            _cancelButton.Enabled = generating;
+            _cancelButton.Enabled = generating && !_cancellationRequested;
+            _cancelButton.Text = _cancellationRequested ? "Annulation…" : "Annuler";
             _catalogButton.Enabled = !generating && !_catalogLoading;
             _recipeBox.Enabled = !generating && _recipes.Count > 0;
             _modelDirectoryBox.Enabled = !generating;
@@ -737,6 +743,8 @@ namespace LocalAIApp
         public void SetStatus(string? text)
         {
             if (InvokeRequired) { BeginInvoke(new Action(() => SetStatus(text))); return; }
+            if (_cancellationRequested)
+                return;
             _statusLabel.Text = text ?? "";
         }
 
@@ -753,6 +761,8 @@ namespace LocalAIApp
         public void SetProgress(string stage, string detail, int? completed, int? total, int? pass)
         {
             if (InvokeRequired) { BeginInvoke(new Action(() => SetProgress(stage, detail, completed, total, pass))); return; }
+            if (_cancellationRequested)
+                return;
             var label = string.IsNullOrWhiteSpace(detail) ? stage : $"{stage} — {detail}";
             if (completed.HasValue && total.HasValue && total.Value > 0)
             {
@@ -768,6 +778,18 @@ namespace LocalAIApp
             }
             if (pass.HasValue && pass.Value > 0) label += $" · passe {pass}";
             SetStatus(label ?? "Génération en cours…");
+        }
+
+        private void RequestCancellation()
+        {
+            if (!_busy || _cancellationRequested)
+                return;
+
+            _cancellationRequested = true;
+            _cancelButton.Enabled = false;
+            _cancelButton.Text = "Annulation…";
+            _statusLabel.Text = "Annulation de la génération en cours…";
+            CancelRequested?.Invoke(this, EventArgs.Empty);
         }
 
         public void SetPreview(string? base64Png)
