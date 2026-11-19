@@ -1,19 +1,19 @@
 {
-  "tag_name": "v1.0.55",
-  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.55",
-  "body": "## Nouveautés de Local IA Runner 1.0.55\r\n\r\n### Laisser le contrôleur travailler pendant les sous-agents\n\n- Exécuter les sous-agents sur un serveur llama.cpp indépendant, sans décharger le modèle principal.\r\n- Rendre leur lancement non bloquant et permettre au contrôleur d’avancer en parallèle.\r\n- Afficher l’état des tâches dans le forum temporaire et attendre leur fin avant goal_met.\r\n- Afficher aussi la progression et le résultat des images générées par un sous-agent.\r\n\r\n## Téléchargements\r\n\r\n- LocalIARunner-Setup-x64.exe : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.\r\n- LocalIARunner-Portable-x64-1.0.55.zip : version portable à extraire et lancer.\r\n\r\nLes modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.",
+  "tag_name": "v1.0.56",
+  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.56",
+  "body": "## Nouveautés de Local IA Runner 1.0.56\r\n\r\n### Relancer la génération d’image en mode CPU si Vulkan échoue\n\n- Détecter l’erreur generate_image returned no results du moteur stable-diffusion.cpp.\r\n- Redémarrer une fois le moteur d’images sur CPU et relancer le même profil et les mêmes paramètres.\r\n- Afficher clairement si l’essai de secours échoue aussi.\r\n\r\n## Téléchargements\r\n\r\n- LocalIARunner-Setup-x64.exe : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.\r\n- LocalIARunner-Portable-x64-1.0.56.zip : version portable à extraire et lancer.\r\n\r\nLes modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.",
   "assets": [
     {
       "name": "LocalIARunner-Setup-x64.exe",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.55/LocalIARunner-Setup-x64.exe",
-      "digest": "sha256:dd50ba80107e6dd3ac5f1a0afc205ef08aaf0fdf793b33a439c5eaaef13caf28",
-      "size": 97572787
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.56/LocalIARunner-Setup-x64.exe",
+      "digest": "sha256:e938895fa7c1d1fc3fb934f48fca31c6bbda8e2cc6c42fe0b3339bc41164f680",
+      "size": 97460440
     },
     {
-      "name": "LocalIARunner-Portable-x64-1.0.55.zip",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.55/LocalIARunner-Portable-x64-1.0.55.zip",
-      "digest": "sha256:ff61656297e59d2da785dc93f795e3d8521f586a1b56e98fe85416139396aeae",
-      "size": 140882843
+      "name": "LocalIARunner-Portable-x64-1.0.56.zip",
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.56/LocalIARunner-Portable-x64-1.0.56.zip",
+      "digest": "sha256:127becb369db99419842092e11041030be1480daf1cc9438baae53b90d2d1aab",
+      "size": 140884506
     }
   ]
 }
