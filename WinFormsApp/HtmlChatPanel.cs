@@ -215,6 +215,19 @@ public sealed class ChatPanel : DoubleBufferedPanel
         RunOnUi(() => RunScript($"window.localIA?.setActivity({ToJson(_activity)});"));
     }
 
+    public void AppendToolStatusToThinking(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return;
+        RunOnUi(() =>
+        {
+            if (_streamEntry == null || string.IsNullOrWhiteSpace(_streamEntry.Thinking))
+                return;
+            _streamEntry.Thinking = _streamEntry.Thinking.TrimEnd() + "\n\n" + content.Trim() + "\n\n";
+            RenderStreamingEntry();
+        });
+    }
+
     public void AppendThinkingPreviewToken(string content)
     {
         if (string.IsNullOrEmpty(content))

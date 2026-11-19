@@ -57,6 +57,9 @@ namespace LocalAIApp
         private DateTime _generationLastProgressTime;
         private int GenerationTimeoutSeconds => Math.Clamp(_appSettings.GenerationTimeoutSeconds, 30, 7200);
         private bool _receivedFirstToken = false;
+        private long _generationOutputTokenCount;
+        private long _generationFirstTokenTimestamp;
+        private long _lastGenerationSpeedUpdateTimestamp;
         
         // File logger
         private readonly string _logFile = Path.Combine(Path.GetTempPath(), "LocalAIApp_Debug.log");
@@ -76,7 +79,11 @@ namespace LocalAIApp
             EnableHighDpiAwareness();
             InitializeComponent();
             _streamRenderTimer = new System.Windows.Forms.Timer { Interval = 33 };
-            _streamRenderTimer.Tick += (s, e) => FlushPendingStreamingTokens();
+            _streamRenderTimer.Tick += (s, e) =>
+            {
+                FlushPendingStreamingTokens();
+                UpdateGenerationSpeedIndicator();
+            };
             Log("=== MainForm constructor START ===");
             
             _conversationsDir = Path.Combine(
@@ -200,6 +207,8 @@ namespace LocalAIApp
             this.Load += (s, e) => 
             {
                 LoadAppSettings();
+                _inputPanel.SetGoalModeEnabled(!_appSettings.UltraLiteMode);
+                _inputPanel.SetShowGenerationSpeed(_appSettings.ShowGenerationSpeed);
                 ThemeColors.SetDarkMode(_appSettings.DarkMode);
                 UpdateTheme();
                 LoadSavedModelsFolder();
@@ -1101,7 +1110,10 @@ namespace LocalAIApp
                 if (tokenMessage?.Type == "stream_token")
                 {
                     if (!string.IsNullOrEmpty(tokenMessage.Content))
+                    {
+                        RecordGenerationToken();
                         QueueStreamingToken(tokenMessage.Content);
+                    }
                     return;
                 }
             }
@@ -1139,6 +1151,7 @@ namespace LocalAIApp
                             break;
                         case "response":
                             _generationWatchdog?.Dispose();
+                            _streamRenderTimer.Stop();
                             _isGenerating = false;
                             _isStreamingResponse = false;
                             _isCancellingGeneration = false;
@@ -1161,6 +1174,7 @@ namespace LocalAIApp
                         case "generation_start":
                             MarkGenerationProgress();
                             _isStreamingResponse = true;
+                            _streamRenderTimer.Start();
                             break;
                         case "subagent_forum_clear_request":
                         {
@@ -1183,6 +1197,7 @@ namespace LocalAIApp
                             var toolStatus = msg.Content ?? "Utilisation d'un outil...";
                             _statusBar.SetStatus(toolStatus, StatusType.Info);
                             _chatPanel.AddToolStatusMessage(toolStatus);
+                            _chatPanel.AppendToolStatusToThinking(toolStatus);
                             break;
                         }
                         case "thinking_token":
@@ -1192,7 +1207,10 @@ namespace LocalAIApp
                                 if (string.Equals(msg.Source, "conversation_title", StringComparison.Ordinal))
                                     _chatPanel.ShowThinkingActivity();
                                 else
+                                {
+                                    RecordGenerationToken();
                                     _chatPanel.AppendThinkingPreviewToken(msg.Content);
+                                }
                             }
                             break;
                         case "thinking_clear":
@@ -1210,7 +1228,10 @@ namespace LocalAIApp
                         case "stream_token":
                             MarkGenerationProgress();
                             if (!string.IsNullOrEmpty(msg.Content))
+                            {
+                                RecordGenerationToken();
                                 QueueStreamingToken(msg.Content);
+                            }
                             break;
                         case "stream_end":
                             System.Diagnostics.Debug.WriteLine($"[C# stream_end] Before EndStreamingMessage, isGenerating={_isGenerating}");
@@ -1294,6 +1315,7 @@ namespace LocalAIApp
                             if (!_isStreamingResponse)
                             {
                                 _generationWatchdog?.Dispose();
+                                _streamRenderTimer.Stop();
                                 _isGenerating = false;
                                 _isCancellingGeneration = false;
                                 _generationTimedOut = false;
@@ -1381,6 +1403,38 @@ namespace LocalAIApp
             {
                 // The UI handle can disappear between the checks and Invoke.
             }
+        }
+
+        private void RecordGenerationToken()
+        {
+            MarkGenerationProgress();
+            if (!_appSettings.ShowGenerationSpeed)
+                return;
+
+            var timestamp = Stopwatch.GetTimestamp();
+            System.Threading.Interlocked.Increment(ref _generationOutputTokenCount);
+            System.Threading.Interlocked.CompareExchange(ref _generationFirstTokenTimestamp, timestamp, 0);
+        }
+
+        private void UpdateGenerationSpeedIndicator()
+        {
+            if (!_isGenerating || !_appSettings.ShowGenerationSpeed)
+                return;
+
+            var start = System.Threading.Interlocked.Read(ref _generationFirstTokenTimestamp);
+            var tokenCount = System.Threading.Interlocked.Read(ref _generationOutputTokenCount);
+            if (start <= 0 || tokenCount <= 0)
+                return;
+
+            var now = Stopwatch.GetTimestamp();
+            var lastUpdate = System.Threading.Interlocked.Read(ref _lastGenerationSpeedUpdateTimestamp);
+            if (lastUpdate > 0 && now - lastUpdate < Stopwatch.Frequency / 2)
+                return;
+            System.Threading.Interlocked.Exchange(ref _lastGenerationSpeedUpdateTimestamp, now);
+
+            var elapsedSeconds = (now - start) / (double)Stopwatch.Frequency;
+            if (elapsedSeconds > 0)
+                _inputPanel.SetGenerationSpeed(tokenCount / elapsedSeconds);
         }
 
         private void QueueStreamingToken(string token)
@@ -1491,8 +1545,20 @@ namespace LocalAIApp
             }
             
             var text = _inputPanel.GetInputText();
+            var requestedGoalMode = InputPanel.HasGoalModePrefix(text);
+            if (requestedGoalMode && _appSettings.UltraLiteMode)
+            {
+                _statusBar.SetStatus("Désactive le mode ultra léger pour utiliser goal:.", StatusType.Warning);
+                return;
+            }
+            var goalMode = InputPanel.TryStripGoalModePrefix(ref text);
             var attachments = _inputPanel.GetAttachments();
-            if (string.IsNullOrWhiteSpace(text) && attachments.Count == 0) return;
+            if (string.IsNullOrWhiteSpace(text) && attachments.Count == 0)
+            {
+                if (goalMode)
+                    _statusBar.SetStatus("Ajoute une instruction après goal:.", StatusType.Warning);
+                return;
+            }
             if (string.IsNullOrWhiteSpace(text))
                 text = attachments.Count == 1 ? "Analyse le fichier joint." : "Analyse les fichiers joints.";
 
@@ -1541,6 +1607,9 @@ namespace LocalAIApp
             _isCancellingGeneration = false;
             _generationTimedOut = false;
             _receivedFirstToken = false;
+            System.Threading.Interlocked.Exchange(ref _generationOutputTokenCount, 0);
+            System.Threading.Interlocked.Exchange(ref _generationFirstTokenTimestamp, 0);
+            System.Threading.Interlocked.Exchange(ref _lastGenerationSpeedUpdateTimestamp, 0);
             _generationLastProgressTime = DateTime.Now;
             _inputPanel.SetGenerating(true);
             _statusBar.SetStatus("Generation en cours...", StatusType.Info);
@@ -1604,6 +1673,7 @@ namespace LocalAIApp
                     title_messages = titleMessages,
                     conversation_title_prompt = _appSettings.UltraLiteMode ? null : _appSettings.ConversationTitlePrompt,
                     prompt = text, 
+                    goal_mode = goalMode,
                     history = history.ToArray(),
                     attachments = attachments.Select(attachment => new
                     {
@@ -1867,6 +1937,8 @@ namespace LocalAIApp
                         _appSettings.SearchAllDrivesForModels != settingsForm.Settings.SearchAllDrivesForModels ||
                         !string.Equals(_appSettings.DefaultTextModelPath, settingsForm.Settings.DefaultTextModelPath, StringComparison.OrdinalIgnoreCase);
                     _appSettings = settingsForm.Settings;
+                    _inputPanel.SetGoalModeEnabled(!_appSettings.UltraLiteMode);
+                    _inputPanel.SetShowGenerationSpeed(_appSettings.ShowGenerationSpeed);
                     SaveAppSettings();
                     if (themeChanged)
                     {
@@ -2517,9 +2589,16 @@ namespace LocalAIApp
                 return;
 
             _generationLastProgressTime = DateTime.Now;
-            _generationWatchdog?.Change(
-                TimeSpan.FromSeconds(GenerationTimeoutSeconds),
-                Timeout.InfiniteTimeSpan);
+            try
+            {
+                _generationWatchdog?.Change(
+                    TimeSpan.FromSeconds(GenerationTimeoutSeconds),
+                    Timeout.InfiniteTimeSpan);
+            }
+            catch (ObjectDisposedException)
+            {
+                // A terminal backend message can dispose the watchdog as the last token arrives.
+            }
         }
 
         private void Log(string message)
@@ -2566,6 +2645,7 @@ namespace LocalAIApp
         public bool SearchAllDrivesForModels { get; set; } = false;
         public bool AutoUpdateEnabled { get; set; } = true;
         public bool DarkMode { get; set; } = false;
+        public bool ShowGenerationSpeed { get; set; } = false;
         public string CodeWorkspace { get; set; } = DefaultCodeWorkspace;
         public float Temperature { get; set; } = 0.7f;
         public float TopP { get; set; } = 0.9f;
@@ -3178,6 +3258,10 @@ namespace LocalAIApp
         private Label _modelLabel;
         private Label _attachmentsLabel;
         private string _normalModelLabel = "Aucun modèle sélectionné";
+        private bool _goalModeEnabled = true;
+        private bool _goalModePrefix;
+        private bool _showGenerationSpeed;
+        private double? _generationSpeed;
         private string _draftBeforeMessageEdit = "";
         private readonly List<ChatAttachment> _attachments = new();
         private List<ChatAttachment> _draftAttachmentsBeforeMessageEdit = new();
@@ -3214,6 +3298,11 @@ namespace LocalAIApp
                 Font = new Font("Segoe UI", 10f),
                 ScrollBars = ScrollBars.Vertical,
                 PlaceholderText = "Écrivez votre message… (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)"
+            };
+            _inputBox.TextChanged += (s, e) =>
+            {
+                _goalModePrefix = HasGoalModePrefix(_inputBox.Text);
+                UpdateModelLabel();
             };
             _inputBox.KeyDown += (s, e) =>
             {
@@ -3344,6 +3433,65 @@ namespace LocalAIApp
         {
             _ready = ready;
             UpdateInteractionState();
+        }
+
+        public void SetGoalModeEnabled(bool enabled)
+        {
+            _goalModeEnabled = enabled;
+            _goalModePrefix = HasGoalModePrefix(_inputBox.Text);
+            UpdateModelLabel();
+        }
+
+        public void SetShowGenerationSpeed(bool show)
+        {
+            _showGenerationSpeed = show;
+            if (!show)
+                _generationSpeed = null;
+            UpdateModelLabel();
+        }
+
+        public void SetGenerationSpeed(double tokensPerSecond)
+        {
+            if (!_showGenerationSpeed || !_isGenerating || !double.IsFinite(tokensPerSecond))
+                return;
+            _generationSpeed = tokensPerSecond;
+            UpdateModelLabel();
+        }
+
+        public static bool HasGoalModePrefix(string text)
+        {
+            var candidate = text ?? "";
+            var index = 0;
+            while (index < candidate.Length && char.IsWhiteSpace(candidate[index]))
+                index++;
+            if (candidate.Length - index < 4 ||
+                string.Compare(candidate, index, "goal", 0, 4, StringComparison.OrdinalIgnoreCase) != 0)
+                return false;
+            index += 4;
+            while (index < candidate.Length && char.IsWhiteSpace(candidate[index]))
+                index++;
+            return index < candidate.Length && candidate[index] == ':';
+        }
+
+        public static bool TryStripGoalModePrefix(ref string text)
+        {
+            var candidate = text ?? "";
+            var index = 0;
+            while (index < candidate.Length && char.IsWhiteSpace(candidate[index]))
+                index++;
+            if (candidate.Length - index < 4 ||
+                string.Compare(candidate, index, "goal", 0, 4, StringComparison.OrdinalIgnoreCase) != 0)
+                return false;
+            index += 4;
+            while (index < candidate.Length && char.IsWhiteSpace(candidate[index]))
+                index++;
+            if (index >= candidate.Length || candidate[index] != ':')
+                return false;
+            index++;
+            while (index < candidate.Length && char.IsWhiteSpace(candidate[index]))
+                index++;
+            text = candidate.Substring(index);
+            return true;
         }
 
         public void SetModelSelected(bool selected, string modelName = "")
@@ -3501,19 +3649,43 @@ namespace LocalAIApp
 
         private void UpdateModelLabel()
         {
-            _modelLabel.Text = _isEditingMessage
-                ? "Modification d’un message — la suite sera remplacée · Échap pour annuler"
-                : _normalModelLabel;
-            _modelLabel.ForeColor = _isEditingMessage
-                ? ThemeColors.Primary
-                : _modelSelected ? ThemeColors.Success : ThemeColors.TextMuted;
+            string label;
+            Color color;
+            if (_goalModePrefix)
+            {
+                label = _goalModeEnabled
+                    ? "Goal mode"
+                    : "Goal mode indisponible en mode ultra léger";
+                color = _goalModeEnabled ? ThemeColors.Primary : ThemeColors.Warning;
+            }
+            else
+            {
+                label = _isEditingMessage
+                    ? "Modification d’un message — la suite sera remplacée · Échap pour annuler"
+                    : _normalModelLabel;
+                color = _isEditingMessage
+                    ? ThemeColors.Primary
+                    : _modelSelected ? ThemeColors.Success : ThemeColors.TextMuted;
+            }
+
+            if (_showGenerationSpeed && _isGenerating && _generationSpeed is double speed)
+                label = _goalModePrefix
+                    ? $"Goal mode · {speed:0.0} tokens/s"
+                    : $"{speed:0.0} tokens/s · {label}";
+
+            _modelLabel.Text = label;
+            _modelLabel.ForeColor = color;
         }
 
         public void SetGenerating(bool generating)
         {
             _isGenerating = generating;
             if (!generating)
+            {
                 _isCancelling = false;
+                _generationSpeed = null;
+            }
+            UpdateModelLabel();
             UpdateInteractionState();
         }
 
@@ -4358,6 +4530,7 @@ namespace LocalAIApp
         private CheckBox _autoUpdateCheckBox = null!;
         private CheckBox _searchAllModelDrivesCheckBox = null!;
         private CheckBox _darkModeCheckBox = null!;
+        private CheckBox _showGenerationSpeedCheckBox = null!;
         private CheckBox _ssdModelMemoryCheckBox = null!;
         private ModernTextBox _codeWorkspaceTextBox = null!;
         private ComboBox _reasoningEffortComboBox = null!;
@@ -4397,6 +4570,7 @@ namespace LocalAIApp
                 EnableSubagents = currentSettings.EnableSubagents,
                 AutoUpdateEnabled = currentSettings.AutoUpdateEnabled,
                 DarkMode = currentSettings.DarkMode,
+                ShowGenerationSpeed = currentSettings.ShowGenerationSpeed,
                 CodeWorkspace = string.IsNullOrWhiteSpace(currentSettings.CodeWorkspace)
                     ? AppSettings.DefaultCodeWorkspace
                     : currentSettings.CodeWorkspace,
@@ -4672,6 +4846,20 @@ namespace LocalAIApp
                 workspacePicker,
                 editorBelowTitle: true,
                 height: 110));
+
+            AddSection(content, "AFFICHAGE PENDANT LA GÉNÉRATION");
+            _showGenerationSpeedCheckBox = new CheckBox
+            {
+                Text = "Afficher",
+                AutoSize = true,
+                ForeColor = ThemeColors.TextPrimary,
+                BackColor = ThemeColors.Surface,
+                FlatStyle = FlatStyle.Flat
+            };
+            content.Controls.Add(CreateSettingCard(
+                "Débit de génération (tokens/s)",
+                "Désactivé par défaut. Affiche la vitesse moyenne de génération dans la ligne du modèle pendant que l’IA réfléchit ou répond. La valeur s’actualise deux fois par seconde.",
+                _showGenerationSpeedCheckBox));
 
             AddSection(content, "DÉLAIS DES OUTILS");
             _generationTimeoutUpDown = CreateNumericControl(30, 7200, 10, 0, 150);
@@ -5007,6 +5195,7 @@ namespace LocalAIApp
             _subagentsEnabledCheckBox.Checked = Settings.EnableSubagents;
             _autoUpdateCheckBox.Checked = Settings.AutoUpdateEnabled;
             _darkModeCheckBox.Checked = Settings.DarkMode;
+            _showGenerationSpeedCheckBox.Checked = Settings.ShowGenerationSpeed;
             _codeWorkspaceTextBox.Text = Settings.CodeWorkspace ?? AppSettings.DefaultCodeWorkspace;
             _stopSequencesTextBox.Text = Settings.StopSequences ?? "";
             SetNumericValue(_temperatureUpDown, (decimal)Settings.Temperature);
@@ -5045,6 +5234,7 @@ namespace LocalAIApp
             Settings.EnableSubagents = _subagentsEnabledCheckBox.Checked;
             Settings.AutoUpdateEnabled = _autoUpdateCheckBox.Checked;
             Settings.DarkMode = _darkModeCheckBox.Checked;
+            Settings.ShowGenerationSpeed = _showGenerationSpeedCheckBox.Checked;
             Settings.CodeWorkspace = string.IsNullOrWhiteSpace(_codeWorkspaceTextBox.Text)
                 ? AppSettings.DefaultCodeWorkspace
                 : _codeWorkspaceTextBox.Text.Trim();
@@ -5096,4 +5286,3 @@ namespace LocalAIApp
         }
     }
 }
-

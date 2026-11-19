@@ -1614,7 +1614,7 @@ class LlamaCppBackend:
                  code_execution_timeout_seconds=30, generated_images_directory=None,
                  enable_forum=False, enable_subagents=False,
                  available_subagent_models=None, available_local_models=None,
-                 ultra_lite=False, attachments=None):
+                 ultra_lite=False, attachments=None, goal_mode=False):
         """Generate through the persistent server; weights stay loaded between turns."""
         try:
             try:
@@ -1652,7 +1652,7 @@ class LlamaCppBackend:
             if goal_prefix:
                 prompt = prompt[goal_prefix.end():]
             # Goal mode is explicit unless the controller actually starts a sub-agent.
-            goal_mode = bool(goal_prefix)
+            goal_mode = not ultra_lite and (bool(goal_mode) or bool(goal_prefix))
             if ultra_lite:
                 # Keep saved prompts and tool settings untouched, but never pass them
                 # to the model (including system messages supplied by other clients).
@@ -3541,7 +3541,6 @@ class LlamaCppBackend:
                         "type": "tool_status",
                         "content": f"Objectif en cours — reprise automatique ({goal_round})…"
                     })
-                    self.send({"type": "thinking_clear"})
                     continue
 
                 content = complete_content(content)
@@ -3606,7 +3605,6 @@ class LlamaCppBackend:
                     messages[0]["content"] += goal_instructions
                 else:
                     messages.insert(0, {"role": "system", "content": goal_instructions.strip()})
-                self.send({"type": "thinking_clear"})
 
             if tool_name == "goal_met":
                 if goal_mode:
@@ -3681,8 +3679,6 @@ class LlamaCppBackend:
                 )
             })
             tool_count += 1
-            if goal_mode:
-                self.send({"type": "thinking_clear"})
 
         cancelled_content = "\n\n".join(forum_post_confirmations)
         finish(cancelled_content, cancelled=True, stream_started=last_stream_started)
@@ -4841,6 +4837,7 @@ def main():
                 available_local_models = request.get("available_local_models", available_subagent_models)
                 ultra_lite = request.get("ultra_lite", False)
                 attachments = request.get("attachments", [])
+                goal_mode = request.get("goal_mode", False)
 
                 if not backend.begin_generation():
                     backend.send({"type": "error", "content": "Une generation est deja en cours."})
@@ -4860,7 +4857,7 @@ def main():
                               generation_timeout_seconds, code_execution_timeout_seconds,
                               generated_images_directory, enable_forum, enable_subagents,
                               available_subagent_models, available_local_models, ultra_lite,
-                              attachments),
+                              attachments, goal_mode),
                         daemon=False  # Non-daemon so we can wait
                     )
                     t.start()
