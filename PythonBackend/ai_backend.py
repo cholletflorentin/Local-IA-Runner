@@ -311,6 +311,7 @@ class LlamaCppBackend:
         self._sd_server_process = None
         self._sd_server_port = None
         self._sd_server_model_dir = None
+        self._sd_server_variant = None
         self._sd_server_log = None
         self._sd_server_log_handle = None
         self._sd_server_lock = threading.RLock()
@@ -932,6 +933,7 @@ class LlamaCppBackend:
             self._sd_server_process = None
             self._sd_server_port = None
             self._sd_server_model_dir = None
+            self._sd_server_variant = None
             self._sd_loaded_config = None
             log_handle = self._sd_server_log_handle
             self._sd_server_log_handle = None
@@ -1006,19 +1008,21 @@ class LlamaCppBackend:
 
         return catalog_root
 
-    def _start_sd_server(self, model_dir):
+    def _start_sd_server(self, model_dir, force_cpu=False):
         model_root = self._prepare_sd_model_root(model_dir)
 
         with self._sd_server_lock:
+            variant_order = ("cpu",) if force_cpu else ("vulkan", "cpu")
             if (self._sd_server_process is not None and self._sd_server_process.poll() is None and
-                    self._sd_server_model_dir == str(model_root)):
+                    self._sd_server_model_dir == str(model_root) and
+                    (not force_cpu or self._sd_server_variant == "cpu")):
                 return self._sd_server_port
 
             self._stop_sd_server()
             self.send({"type": "image_engine_status", "content": "Préparation du moteur d'images…"})
 
             startup_errors = []
-            for variant in ("vulkan", "cpu"):
+            for variant in variant_order:
                 try:
                     executable = self._download_sd_server(variant)
                     port = self._reserve_local_port()
@@ -1037,12 +1041,16 @@ class LlamaCppBackend:
                     self._sd_server_process = process
                     self._sd_server_port = port
                     self._sd_server_model_dir = str(model_root)
+                    self._sd_server_variant = variant
                     self._sd_server_log = log_path
                     self._sd_server_log_handle = log_handle
 
                     self.send({"type": "image_engine_status", "content": "Démarrage du serveur d'images…"})
                     deadline = time.monotonic() + 45
                     while time.monotonic() < deadline:
+                        if self._cancel_requested.is_set():
+                            self._stop_sd_server()
+                            raise InterruptedError("Le démarrage du moteur d'images a été annulé.")
                         if process.poll() is not None:
                             raise RuntimeError(
                                 f"sd-server s'est arrêté (code {process.returncode}). "
@@ -1058,7 +1066,9 @@ class LlamaCppBackend:
                 except Exception as error:
                     startup_errors.append(f"{variant}: {error}")
                     self._stop_sd_server()
-                    if variant == "vulkan":
+                    if self._cancel_requested.is_set():
+                        raise
+                    if variant == "vulkan" and not force_cpu:
                         self.send({"type": "image_engine_status", "content": "Vulkan indisponible, essai du moteur CPU…"})
 
             raise RuntimeError("Impossible de démarrer stable-diffusion.cpp. " + " | ".join(startup_errors))
@@ -1458,6 +1468,43 @@ class LlamaCppBackend:
                     error = status.get("error") or {}
                     message = error.get("message", "Génération annulée.") if isinstance(error, dict) else str(error)
                     if state == "failed":
+                        can_retry_on_cpu = (
+                            self._sd_server_variant == "vulkan"
+                            and not request.get("_cpu_fallback_attempted")
+                            and not self._cancel_requested.is_set()
+                            and any(marker in message.casefold() for marker in (
+                                "generate_image returned no results",
+                                "generate_image returned empty results",
+                                "returned empty encoded outputs"
+                            ))
+                        )
+                        if can_retry_on_cpu:
+                            request["_cpu_fallback_attempted"] = True
+                            self.send({
+                                "type": "image_engine_status",
+                                "content": (
+                                    "Vulkan n’a produit aucune image. Nouvel essai sur le processeur; "
+                                    "ce mode peut être plus lent…"
+                                )
+                            })
+                            with self._sd_job_lock:
+                                if self._sd_active_job_id == job_id:
+                                    self._sd_active_job_id = None
+                            self._stop_sd_server()
+                            if self._cancel_requested.is_set():
+                                self.send({"type": "image_complete", "cancelled": True})
+                                return []
+                            cpu_port = self._start_sd_server(model_dir, force_cpu=True)
+                            self._load_image_model(cpu_port, recipe, models)
+                            retry_request = dict(request)
+                            retry_request["_cpu_fallback_attempted"] = True
+                            request["_cpu_fallback_error_delegated"] = True
+                            retry_request["_cpu_fallback_error_delegated"] = False
+                            return self._run_image_generation(retry_request)
+                        if request.get("_cpu_fallback_attempted"):
+                            raise RuntimeError(
+                                "La génération a échoué en mode Vulkan puis en mode CPU : " + str(message)
+                            )
                         raise RuntimeError(message)
                     self.send({"type": "image_complete", "cancelled": True})
                     return []
@@ -1472,7 +1519,12 @@ class LlamaCppBackend:
             if self._cancel_requested.is_set():
                 self.send({"type": "image_complete", "cancelled": True})
                 return []
-            self.send({"type": "image_error", "content": str(error)})
+            error_message = str(error)
+            if request.get("_cpu_fallback_attempted") and not error_message.startswith(
+                    "La génération a échoué en mode Vulkan puis en mode CPU"):
+                error_message = "Nouvel essai sur le processeur après l’échec Vulkan : " + error_message
+            if not request.get("_cpu_fallback_error_delegated"):
+                self.send({"type": "image_error", "content": error_message})
             raise
         finally:
             if job_id:
