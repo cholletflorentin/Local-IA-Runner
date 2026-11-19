@@ -3338,6 +3338,11 @@ class LlamaCppBackend:
                     delta.get("reasoning_content", delta.get("reasoning", ""))
                 )
                 if reasoning:
+                    # The tool-call parser can keep this text hidden while it
+                    # decides whether the model produced a valid invocation.
+                    # Report generated chunks separately so the UI's speed
+                    # counter includes that work as well as visible text.
+                    self.send({"type": "generation_token"})
                     if self._has_thinking_markup(content):
                         if reasoning_buffer:
                             self.send({"type": "thinking_clear"})
@@ -3347,6 +3352,7 @@ class LlamaCppBackend:
                         self.send({"type": "thinking_token", "content": reasoning})
 
                 if content:
+                    self.send({"type": "generation_token"})
                     if self._has_thinking_markup(content) and reasoning_buffer:
                         self.send({"type": "thinking_clear"})
                         reasoning_buffer.clear()
@@ -3587,6 +3593,7 @@ class LlamaCppBackend:
                     task_message,
                     reserve_chars=WEB_SEARCH_RESULT_CONTEXT_CHARS + len(serialized_call) + 192
                 )
+            self.send({"type": "generation_pause"})
             self.send({"type": "tool_status", "content": self._tool_status_text(tool_name)})
 
             if tool_name == "spawn_subagent" and enable_subagents and not goal_mode:
@@ -3679,6 +3686,7 @@ class LlamaCppBackend:
                 )
             })
             tool_count += 1
+            self.send({"type": "generation_resume"})
 
         cancelled_content = "\n\n".join(forum_post_confirmations)
         finish(cancelled_content, cancelled=True, stream_started=last_stream_started)
@@ -4737,6 +4745,7 @@ class LlamaCppBackend:
                         delta.get("reasoning_content", delta.get("reasoning", ""))
                     )
                     if reasoning and not self._has_thinking_markup(content):
+                        self.send({"type": "generation_token"})
                         if not reasoning_markup_open:
                             reasoning_markup_start = len(full_response)
                             full_response += "<think>"
@@ -4744,6 +4753,7 @@ class LlamaCppBackend:
                         full_response += reasoning
                         self.send({"type": "thinking_token", "content": reasoning})
                     if content:
+                        self.send({"type": "generation_token"})
                         if self._has_thinking_markup(content):
                             if reasoning_markup_open:
                                 full_response = full_response[:reasoning_markup_start]

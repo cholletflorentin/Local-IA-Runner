@@ -60,6 +60,8 @@ namespace LocalAIApp
         private long _generationOutputTokenCount;
         private long _generationFirstTokenTimestamp;
         private long _lastGenerationSpeedUpdateTimestamp;
+        private long _generationPausedTimestamp;
+        private long _generationPausedTicks;
         
         // File logger
         private readonly string _logFile = Path.Combine(Path.GetTempPath(), "LocalAIApp_Debug.log");
@@ -1107,13 +1109,15 @@ namespace LocalAIApp
             try
             {
                 var tokenMessage = JsonConvert.DeserializeObject<PythonMessage>(line);
+                if (tokenMessage?.Type == "generation_token")
+                {
+                    RecordGenerationToken();
+                    return;
+                }
                 if (tokenMessage?.Type == "stream_token")
                 {
                     if (!string.IsNullOrEmpty(tokenMessage.Content))
-                    {
-                        RecordGenerationToken();
                         QueueStreamingToken(tokenMessage.Content);
-                    }
                     return;
                 }
             }
@@ -1176,6 +1180,12 @@ namespace LocalAIApp
                             _isStreamingResponse = true;
                             _streamRenderTimer.Start();
                             break;
+                        case "generation_pause":
+                            PauseGenerationSpeed();
+                            break;
+                        case "generation_resume":
+                            ResumeGenerationSpeed();
+                            break;
                         case "subagent_forum_clear_request":
                         {
                             var decision = MessageBox.Show(
@@ -1208,7 +1218,6 @@ namespace LocalAIApp
                                     _chatPanel.ShowThinkingActivity();
                                 else
                                 {
-                                    RecordGenerationToken();
                                     _chatPanel.AppendThinkingPreviewToken(msg.Content);
                                 }
                             }
@@ -1229,7 +1238,6 @@ namespace LocalAIApp
                             MarkGenerationProgress();
                             if (!string.IsNullOrEmpty(msg.Content))
                             {
-                                RecordGenerationToken();
                                 QueueStreamingToken(msg.Content);
                             }
                             break;
@@ -1432,9 +1440,32 @@ namespace LocalAIApp
                 return;
             System.Threading.Interlocked.Exchange(ref _lastGenerationSpeedUpdateTimestamp, now);
 
-            var elapsedSeconds = (now - start) / (double)Stopwatch.Frequency;
+            var pausedAt = System.Threading.Interlocked.Read(ref _generationPausedTimestamp);
+            var elapsedTicks = (pausedAt > 0 ? pausedAt : now) - start
+                - System.Threading.Interlocked.Read(ref _generationPausedTicks);
+            var elapsedSeconds = elapsedTicks / (double)Stopwatch.Frequency;
             if (elapsedSeconds > 0)
                 _inputPanel.SetGenerationSpeed(tokenCount / elapsedSeconds);
+        }
+
+        private void PauseGenerationSpeed()
+        {
+            if (!_appSettings.ShowGenerationSpeed)
+                return;
+
+            System.Threading.Interlocked.CompareExchange(
+                ref _generationPausedTimestamp, Stopwatch.GetTimestamp(), 0);
+        }
+
+        private void ResumeGenerationSpeed()
+        {
+            var pausedAt = System.Threading.Interlocked.Exchange(ref _generationPausedTimestamp, 0);
+            if (pausedAt <= 0)
+                return;
+
+            var pausedTicks = Stopwatch.GetTimestamp() - pausedAt;
+            if (pausedTicks > 0)
+                System.Threading.Interlocked.Add(ref _generationPausedTicks, pausedTicks);
         }
 
         private void QueueStreamingToken(string token)
@@ -1610,6 +1641,8 @@ namespace LocalAIApp
             System.Threading.Interlocked.Exchange(ref _generationOutputTokenCount, 0);
             System.Threading.Interlocked.Exchange(ref _generationFirstTokenTimestamp, 0);
             System.Threading.Interlocked.Exchange(ref _lastGenerationSpeedUpdateTimestamp, 0);
+            System.Threading.Interlocked.Exchange(ref _generationPausedTimestamp, 0);
+            System.Threading.Interlocked.Exchange(ref _generationPausedTicks, 0);
             _generationLastProgressTime = DateTime.Now;
             _inputPanel.SetGenerating(true);
             _statusBar.SetStatus("Generation en cours...", StatusType.Info);
