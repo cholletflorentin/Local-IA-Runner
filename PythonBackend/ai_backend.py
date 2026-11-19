@@ -2491,7 +2491,7 @@ class LlamaCppBackend:
                 spawn_subagent_instruction += (
                     f' Exemple avec un outil autorisé ({example_tool}) : '
                     '<spawn_subagent>{"model_path":"chemin exact d’un modèle proposé","prompt":"consigne complète",'
-                    f'"tools":[{json.dumps(example_tool, ensure_ascii=False)}],"goal_mode":false}</spawn_subagent>'
+                    f'"tools":[{json.dumps(example_tool, ensure_ascii=False)}],"goal_mode":false}}</spawn_subagent>'
                 )
             tools.extend((
                 spawn_subagent_instruction,
@@ -4957,4 +4957,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

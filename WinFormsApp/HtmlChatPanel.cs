@@ -28,6 +28,8 @@ public sealed class ChatPanel : DoubleBufferedPanel
     private bool _streamIsThinking;
     private bool _documentReady;
     private bool _closing;
+    private bool _browserInitializationStarted;
+    private readonly System.Windows.Forms.Timer _initializationWatchdog = new() { Interval = 30_000 };
 
     public event Action<int>? EditMessageRequested;
 
@@ -75,7 +77,19 @@ public sealed class ChatPanel : DoubleBufferedPanel
         _fallbackPanel.Controls.Add(_fallbackLabel);
         Controls.Add(_fallbackPanel);
 
-        _ = InitializeBrowserAsync();
+        _initializationWatchdog.Tick += (_, _) =>
+        {
+            _initializationWatchdog.Stop();
+            if (_closing || IsDisposed || _documentReady)
+                return;
+
+            _fallbackLabel.Text = "L’affichage du chat n’a pas démarré après 30 secondes. Vérifie ou installe le runtime Microsoft Edge WebView2, puis relance l’application.";
+            _fallbackLabel.Height = 110;
+            _runtimeLink.Text = File.Exists(GetWebViewBootstrapperPath())
+                ? "Installer le runtime Microsoft Edge WebView2"
+                : "Télécharger le runtime Microsoft Edge WebView2";
+            _runtimeLink.Visible = true;
+        };
     }
 
     public void SetConversationTitle(string? title)
@@ -343,10 +357,13 @@ public sealed class ChatPanel : DoubleBufferedPanel
         }
         catch (Exception exception)
         {
-            if (_closing || IsDisposed || !IsHandleCreated)
+            if (_closing || IsDisposed)
                 return;
+            _initializationWatchdog.Stop();
             RunOnUi(() =>
             {
+                if (_closing || IsDisposed)
+                    return;
                 _documentReady = false;
                 _webView.Visible = false;
                 _fallbackPanel.Visible = true;
@@ -363,6 +380,7 @@ public sealed class ChatPanel : DoubleBufferedPanel
 
     private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs args)
     {
+        _initializationWatchdog.Stop();
         if (!args.IsSuccess)
         {
             RunOnUi(() =>
@@ -665,11 +683,26 @@ public sealed class ChatPanel : DoubleBufferedPanel
         action();
     }
 
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        if (_browserInitializationStarted || _closing || IsDisposed)
+            return;
+
+        _browserInitializationStarted = true;
+        _initializationWatchdog.Start();
+        _ = InitializeBrowserAsync();
+    }
+
     protected override void Dispose(bool disposing)
     {
         _closing = true;
         if (disposing)
+        {
+            _initializationWatchdog.Stop();
+            _initializationWatchdog.Dispose();
             _webView.Dispose();
+        }
         base.Dispose(disposing);
     }
 
@@ -705,4 +738,3 @@ public sealed class ChatPanel : DoubleBufferedPanel
         };
     }
 }
-
