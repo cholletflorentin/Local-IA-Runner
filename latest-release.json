@@ -1,19 +1,19 @@
 {
-  "tag_name": "v1.0.56",
-  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.56",
-  "body": "## Nouveautés de Local IA Runner 1.0.56\r\n\r\n### Relancer la génération d’image en mode CPU si Vulkan échoue\n\n- Détecter l’erreur generate_image returned no results du moteur stable-diffusion.cpp.\r\n- Redémarrer une fois le moteur d’images sur CPU et relancer le même profil et les mêmes paramètres.\r\n- Afficher clairement si l’essai de secours échoue aussi.\r\n\r\n## Téléchargements\r\n\r\n- LocalIARunner-Setup-x64.exe : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.\r\n- LocalIARunner-Portable-x64-1.0.56.zip : version portable à extraire et lancer.\r\n\r\nLes modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.",
+  "tag_name": "v1.0.57",
+  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.57",
+  "body": "## Nouveautés de Local IA Runner 1.0.57\r\n\r\n### Corriger génération d’image, réflexion et mmproj\n\n### Bugs corrigés\r\n- Reprendre la génération d’image sur CPU si Vulkan échoue ou si le serveur Vulkan tombe pendant l’inférence; en cas d’échec CPU à grande résolution, réduire à 512 px et réessayer.\r\n- Garder une graine stable entre les reprises et afficher la taille finale utilisée.\r\n- Ne plus classer une réponse normale comme réflexion en réutilisant une ancienne réflexion du flux.\r\n- Associer les mmproj uniquement à un modèle dont le nom correspond clairement; limiter le projecteur générique au dossier contenant un seul modèle.\r\n\r\n### Vérification\r\n- Compilation Release .NET réussie.\r\n- Syntaxe du backend Python vérifiée.\r\n- La génération réelle n’a pas été relancée sur le moteur local pendant cette validation.\r\n\r\n## Téléchargements\r\n\r\n- LocalIARunner-Setup-x64.exe : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.\r\n- LocalIARunner-Portable-x64-1.0.57.zip : version portable à extraire et lancer.\r\n\r\nLes modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.",
   "assets": [
     {
       "name": "LocalIARunner-Setup-x64.exe",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.56/LocalIARunner-Setup-x64.exe",
-      "digest": "sha256:e938895fa7c1d1fc3fb934f48fca31c6bbda8e2cc6c42fe0b3339bc41164f680",
-      "size": 97460440
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.57/LocalIARunner-Setup-x64.exe",
+      "digest": "sha256:426719469060480459343bc23a57515999896ee580a0077cf7f0966929482f15",
+      "size": 98263175
     },
     {
-      "name": "LocalIARunner-Portable-x64-1.0.56.zip",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.56/LocalIARunner-Portable-x64-1.0.56.zip",
-      "digest": "sha256:127becb369db99419842092e11041030be1480daf1cc9438baae53b90d2d1aab",
-      "size": 140884506
+      "name": "LocalIARunner-Portable-x64-1.0.57.zip",
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.57/LocalIARunner-Portable-x64-1.0.57.zip",
+      "digest": "sha256:05acf3bd238806fde304973294ee108a4f0f2eddd7dbc41ec79cef7ed07f532e",
+      "size": 142184949
     }
   ]
 }
