@@ -1374,9 +1374,12 @@ namespace LocalAIApp
                         case "image_engine_status":
                             MarkGenerationProgress();
                             _imageGeneratorForm?.SetStatus(msg.Content ?? "Préparation du moteur d'images…");
+                            _subagentActivityForm?.AppendImageActivity("status", msg.Content ?? "Préparation du moteur d'images…");
                             break;
                         case "image_engine_progress":
                             _imageGeneratorForm?.SetDownloadProgress(msg.Downloaded ?? 0, msg.Total ?? 0);
+                            _subagentActivityForm?.AppendImageActivity(
+                                "engine_progress", downloaded: msg.Downloaded, downloadTotal: msg.Total);
                             break;
                         case "image_catalog":
                             _imageGeneratorForm?.SetCatalog(
@@ -1387,20 +1390,33 @@ namespace LocalAIApp
                         case "image_start":
                         case "image_loading":
                             MarkGenerationProgress();
+                            ShowSubagentActivity(activate: false);
                             _imageGenerationActive = true;
                             _imageGeneratorForm?.SetGenerating(true);
-                            _imageGeneratorForm?.SetStatus(msg.Content ?? "Chargement du modèle d'images…");
+                            var imageStartText = msg.Content ?? "Chargement du modèle d'images…";
+                            _imageGeneratorForm?.SetStatus(imageStartText);
+                            _subagentActivityForm?.AppendImageActivity("start", imageStartText);
                             break;
                         case "image_progress":
                             MarkGenerationProgress();
                             _imageGeneratorForm?.SetProgress(msg.Stage, msg.Detail, msg.Completed, msg.Total, msg.Pass);
+                            _subagentActivityForm?.AppendImageActivity(
+                                "progress",
+                                string.Join(" — ", new[] { msg.Stage, msg.Detail }.Where(value => !string.IsNullOrWhiteSpace(value))),
+                                msg.Completed, msg.Total, msg.Pass);
                             break;
                         case "image_preview":
                             if (!string.IsNullOrEmpty(msg.Content))
+                            {
                                 _imageGeneratorForm?.SetPreview(msg.Content);
+                                _subagentActivityForm?.AppendImageActivity("preview", msg.Content);
+                            }
                             break;
                         case "image_complete":
                             _imageGenerationActive = false;
+                            _subagentActivityForm?.AppendImageActivity(
+                                msg.Error != null ? "error" : msg.Cancelled ? "cancelled" : "complete",
+                                msg.Error ?? msg.Content ?? "");
                             _imageGeneratorForm?.SetCompleted(
                                 msg.Paths?.ToObject<List<string>>() ?? new List<string>(),
                                 msg.Error,
@@ -1411,6 +1427,7 @@ namespace LocalAIApp
                             break;
                         case "image_error":
                             _imageGenerationActive = false;
+                            _subagentActivityForm?.AppendImageActivity("error", msg.Content ?? "Erreur inconnue");
                             _imageGeneratorForm?.SetCompleted(new List<string>(), msg.Content ?? "Erreur inconnue", false);
                             _statusBar.SetStatus("Erreur génération image", StatusType.Error);
                             ApplyPendingUpdateWhenIdle();
@@ -4474,7 +4491,7 @@ namespace LocalAIApp
             toolsMenu.DropDownItems.Add(new ToolStripSeparator());
             toolsMenu.DropDownItems.Add(CreateItem("Générer une image…", null, (s, e) => ImageGeneratorClicked?.Invoke(this, e)));
             toolsMenu.DropDownItems.Add(CreateItem("Forum des IA…", null, (s, e) => ForumClicked?.Invoke(this, e)));
-            toolsMenu.DropDownItems.Add(CreateItem("Activité des sous-agents…", null, (s, e) => SubagentActivityClicked?.Invoke(this, e)));
+            toolsMenu.DropDownItems.Add(CreateItem("Suivi des tâches IA…", null, (s, e) => SubagentActivityClicked?.Invoke(this, e)));
             toolsMenu.DropDownItems.Add(CreateItem("Parametres...", "Ctrl+P", (s, e) => SettingsClicked?.Invoke(this, e)));
             toolsMenu.DropDownItems.Add(new ToolStripSeparator());
             toolsMenu.DropDownItems.Add(CreateItem("Vérifier les mises à jour…", null, (s, e) => CheckForUpdatesClicked?.Invoke(this, e)));
@@ -5445,3 +5462,4 @@ namespace LocalAIApp
         }
     }
 }
+
