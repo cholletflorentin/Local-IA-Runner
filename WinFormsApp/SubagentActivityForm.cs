@@ -237,12 +237,13 @@ namespace LocalAIApp
                         ? $"Téléchargement du moteur : {FormatBytes(downloaded.GetValueOrDefault())} / {FormatBytes(downloadTotal.GetValueOrDefault())}"
                         : "Téléchargement du moteur d’images…";
                     SetImageStatus(downloadText, ThemeColors.TextSecondary);
-                    if (downloaded.HasValue && downloadTotal.GetValueOrDefault() > 0)
+                    var totalBytes = downloadTotal.GetValueOrDefault();
+                    if (downloaded.HasValue && totalBytes > 0)
                     {
                         _imageProgressBar!.Style = ProgressBarStyle.Continuous;
                         _imageProgressBar.Maximum = 1000;
                         _imageProgressBar.Value = (int)Math.Clamp(
-                            downloaded.Value * 1000 / downloadTotal.Value, 0, 1000);
+                            downloaded.Value * 1000 / totalBytes, 0, 1000);
                     }
                     AppendImageLog(downloadText, ThemeColors.TextPrimary);
                     break;
@@ -327,7 +328,6 @@ namespace LocalAIApp
 
             var pane = new AgentActivityPane
             {
-                ActivityId = activityId,
                 Model = model,
                 Number = number,
                 Page = page,
