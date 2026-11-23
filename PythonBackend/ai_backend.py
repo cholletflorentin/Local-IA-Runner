@@ -43,6 +43,7 @@ TOOL_CALL_OPEN = "<tool_call>"
 TOOL_CALL_CLOSE = "</tool_call>"
 SUPPORTED_TOOL_NAMES = frozenset({
     "web_search", "browse_url", "list_files", "read_file", "write_file", "run_python",
+    "run_system_command",
     "list_images", "copy_image", "move_image", "generate_image", "forum_search", "forum_post",
     "list_local_models", "spawn_subagent", "subagent_forum_search", "goal_met"
 })
@@ -64,6 +65,10 @@ MAX_WORKSPACE_FILE_BYTES = 512_000
 MAX_IMAGE_TOOL_FILE_BYTES = 512 * 1024 * 1024
 MAX_CHAT_ATTACHMENT_BYTES = 512 * 1024 * 1024
 IMAGE_FILE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"})
+
+
+class ImageSafetyLimitError(RuntimeError):
+    """Raised when image inference would exceed configured RAM or disk limits."""
 
 
 def validate_public_http_url(url):
@@ -312,8 +317,13 @@ class LlamaCppBackend:
         self._sd_server_port = None
         self._sd_server_model_dir = None
         self._sd_server_variant = None
+        self._sd_server_memory_mode = None
+        self._sd_server_memory_limit_gb = None
+        self._sd_server_job_handle = None
         self._sd_server_log = None
         self._sd_server_log_handle = None
+        self.image_engine_memory_limit_gb = 4
+        self.image_minimum_free_disk_gb = 5
         self._sd_server_lock = threading.RLock()
         self._sd_job_lock = threading.Lock()
         self._sd_active_job_id = None
@@ -465,6 +475,21 @@ class LlamaCppBackend:
     def _terminate_process(process):
         if process.poll() is not None:
             return
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                    check=False,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                )
+                if process.poll() is not None:
+                    return
+            except (OSError, subprocess.SubprocessError):
+                pass
         try:
             process.terminate()
             process.wait(timeout=2)
@@ -927,6 +952,141 @@ class LlamaCppBackend:
         except Exception:
             return ""
 
+    @staticmethod
+    def _assign_process_memory_limit(process, memory_limit_gb):
+        """Put sd-server in a Windows job with a hard commit limit."""
+        if os.name != "nt":
+            return None
+
+        import ctypes
+        from ctypes import wintypes
+
+        class BasicLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class IoCounters(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_uint64),
+                ("WriteOperationCount", ctypes.c_uint64),
+                ("OtherOperationCount", ctypes.c_uint64),
+                ("ReadTransferCount", ctypes.c_uint64),
+                ("WriteTransferCount", ctypes.c_uint64),
+                ("OtherTransferCount", ctypes.c_uint64),
+            ]
+
+        class ExtendedLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", BasicLimitInformation),
+                ("IoInfo", IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.SetInformationJobObject.argtypes = [
+            wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD
+        ]
+        kernel32.SetInformationJobObject.restype = wintypes.BOOL
+        kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            raise ImageSafetyLimitError(
+                f"Impossible de créer la limite mémoire du moteur d’image : "
+                f"{ctypes.WinError(ctypes.get_last_error())}"
+            )
+
+        limit_bytes = int(memory_limit_gb) * 1024 ** 3
+        information = ExtendedLimitInformation()
+        information.BasicLimitInformation.LimitFlags = (
+            0x100 | 0x200 | 0x2000  # process/job memory; kill the server if its owner exits
+        )
+        information.ProcessMemoryLimit = limit_bytes
+        information.JobMemoryLimit = limit_bytes
+
+        try:
+            if not kernel32.SetInformationJobObject(
+                    job, 9, ctypes.byref(information), ctypes.sizeof(information)):
+                raise OSError(ctypes.get_last_error(), "SetInformationJobObject a échoué")
+            if not kernel32.AssignProcessToJobObject(job, wintypes.HANDLE(process._handle)):
+                raise OSError(ctypes.get_last_error(), "AssignProcessToJobObject a échoué")
+            return job
+        except Exception as error:
+            kernel32.CloseHandle(job)
+            raise ImageSafetyLimitError(
+                "Impossible d’appliquer la limite mémoire de "
+                f"{memory_limit_gb} Gio au moteur d’image : {error}"
+            ) from error
+
+    @staticmethod
+    def _close_process_job(job_handle):
+        if not job_handle or os.name != "nt":
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            kernel32.CloseHandle(job_handle)
+        except Exception:
+            pass
+
+    def _check_image_storage_budget(self, request):
+        try:
+            minimum_gb = int(request.get(
+                "image_minimum_free_disk_gb", self.image_minimum_free_disk_gb
+            ))
+        except (TypeError, ValueError):
+            minimum_gb = 5
+        minimum_gb = max(1, min(100, minimum_gb))
+        minimum_bytes = minimum_gb * 1024 ** 3
+
+        system_drive = os.environ.get("SystemDrive")
+        if system_drive:
+            system_root = system_drive.rstrip("\\/") + "\\"
+        else:
+            system_root = Path(tempfile.gettempdir()).anchor or os.sep
+        output_path = request.get("output_dir") or self.generated_images_directory
+        roots = {system_root}
+        try:
+            output_anchor = Path(str(output_path)).expanduser().resolve().anchor
+            if output_anchor:
+                roots.add(output_anchor)
+        except (OSError, RuntimeError, ValueError):
+            pass
+
+        for root in roots:
+            try:
+                free_bytes = shutil.disk_usage(root).free
+            except OSError as error:
+                raise ImageSafetyLimitError(
+                    f"Impossible de vérifier l’espace libre sur {root} : {error}"
+                ) from error
+            if free_bytes < minimum_bytes:
+                free_gb = free_bytes / (1024 ** 3)
+                raise ImageSafetyLimitError(
+                    f"Génération arrêtée pour préserver le disque {root} : "
+                    f"il reste {free_gb:.1f} Gio, le minimum réglé est {minimum_gb} Gio."
+                )
+
     def _stop_sd_server(self):
         with self._sd_server_lock:
             process = self._sd_server_process
@@ -934,16 +1094,56 @@ class LlamaCppBackend:
             self._sd_server_port = None
             self._sd_server_model_dir = None
             self._sd_server_variant = None
+            self._sd_server_memory_mode = None
+            self._sd_server_memory_limit_gb = None
             self._sd_loaded_config = None
+            job_handle = self._sd_server_job_handle
+            self._sd_server_job_handle = None
             log_handle = self._sd_server_log_handle
             self._sd_server_log_handle = None
             if process is not None:
                 self._terminate_process(process)
+            self._close_process_job(job_handle)
             if log_handle is not None:
                 try:
                     log_handle.close()
                 except Exception:
                     pass
+
+    def _legacy_sd_catalog_root(self, model_root):
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if not local_app_data:
+            return None
+        root_key = hashlib.sha256(
+            os.path.normcase(str(Path(model_root).resolve())).encode("utf-8")
+        ).hexdigest()[:16]
+        return Path(local_app_data) / "LocalIARunner" / "ImageModelRoots" / root_key
+
+    def _remove_legacy_sd_model_root(self, model_root):
+        """Remove only legacy AppData hard links that still point to source models."""
+        legacy_root = self._legacy_sd_catalog_root(model_root)
+        if legacy_root is None or not legacy_root.is_dir():
+            return
+
+        source_root = Path(model_root).resolve()
+        checkpoint_directory = legacy_root / "checkpoints"
+        if checkpoint_directory.is_dir():
+            for entry in checkpoint_directory.iterdir():
+                source = source_root / entry.name
+                try:
+                    if entry.is_file() and source.is_file() and os.path.samefile(entry, source):
+                        entry.unlink()
+                except OSError:
+                    continue
+            try:
+                checkpoint_directory.rmdir()
+            except OSError:
+                pass
+        try:
+            legacy_root.rmdir()
+            legacy_root.parent.rmdir()
+        except OSError:
+            pass
 
     def _prepare_sd_model_root(self, model_dir):
         model_root = Path(model_dir).expanduser().resolve()
@@ -971,17 +1171,9 @@ class LlamaCppBackend:
             return model_root
 
         root_key = hashlib.sha256(os.path.normcase(str(model_root)).encode("utf-8")).hexdigest()[:16]
-        local_app_data = os.environ.get("LOCALAPPDATA")
-        cache_base = (Path(local_app_data) / "LocalIARunner" / "ImageModelRoots"
-                      if local_app_data else Path(tempfile.gettempdir()) / "LocalIARunner" / "ImageModelRoots")
-        source_drive = os.path.splitdrive(str(model_root))[0].casefold()
-        cache_drive = os.path.splitdrive(str(cache_base))[0].casefold()
-        if os.name == "nt" and source_drive and cache_drive and source_drive != cache_drive:
-            # Hard links cannot cross volumes. Keep the tiny catalog layout on the model's
-            # volume so the checkpoint weights themselves are never copied.
-            cache_base = model_root / ".localia-image-model-catalog"
-
-        catalog_root = cache_base / root_key
+        # Keep the engine's catalog beside the source models. It contains hard links,
+        # not weight copies, and therefore never fills the AppData volume.
+        catalog_root = model_root / ".localia-image-model-catalog" / root_key
         checkpoint_directory = catalog_root / "checkpoints"
         checkpoint_directory.mkdir(parents=True, exist_ok=True)
         expected_names = {model.name.casefold() for model in loose_models}
@@ -1008,17 +1200,23 @@ class LlamaCppBackend:
 
         return catalog_root
 
-    def _start_sd_server(self, model_dir, force_cpu=False):
+    def _start_sd_server(self, model_dir, force_cpu=False, use_disk_for_memory=False,
+                         memory_limit_gb=4):
         model_root = self._prepare_sd_model_root(model_dir)
+        memory_limit_gb = max(1, min(64, int(memory_limit_gb)))
+        memory_mode = "cpu-safe" if use_disk_for_memory else "automatic"
 
         with self._sd_server_lock:
-            variant_order = ("cpu",) if force_cpu else ("vulkan", "cpu")
+            variant_order = ("cpu",) if (force_cpu or use_disk_for_memory) else ("vulkan", "cpu")
             if (self._sd_server_process is not None and self._sd_server_process.poll() is None and
                     self._sd_server_model_dir == str(model_root) and
+                    self._sd_server_memory_mode == memory_mode and
+                    self._sd_server_memory_limit_gb == memory_limit_gb and
                     (not force_cpu or self._sd_server_variant == "cpu")):
                 return self._sd_server_port
 
             self._stop_sd_server()
+            self._remove_legacy_sd_model_root(Path(model_dir).expanduser().resolve())
             self.send({"type": "image_engine_status", "content": "Préparation du moteur d'images…"})
 
             startup_errors = []
@@ -1029,6 +1227,7 @@ class LlamaCppBackend:
                     log_path = Path(tempfile.gettempdir()) / f"LocalIARunner_sd-server_{port}.log"
                     log_handle = open(log_path, "wb")
                     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                    process_options = {"creationflags": creation_flags} if os.name == "nt" else {}
                     process = subprocess.Popen(
                         [executable, "--listen-ip", "127.0.0.1", "--listen-port", str(port),
                          "--model-dir", str(model_root)],
@@ -1036,14 +1235,23 @@ class LlamaCppBackend:
                         stdin=subprocess.DEVNULL,
                         stdout=log_handle,
                         stderr=subprocess.STDOUT,
-                        creationflags=creation_flags
+                        **process_options
                     )
                     self._sd_server_process = process
                     self._sd_server_port = port
                     self._sd_server_model_dir = str(model_root)
+                    self._sd_server_memory_mode = memory_mode
+                    self._sd_server_memory_limit_gb = memory_limit_gb
                     self._sd_server_variant = variant
                     self._sd_server_log = log_path
                     self._sd_server_log_handle = log_handle
+                    try:
+                        self._sd_server_job_handle = self._assign_process_memory_limit(
+                            process, memory_limit_gb
+                        )
+                    except Exception:
+                        self._stop_sd_server()
+                        raise
 
                     self.send({"type": "image_engine_status", "content": "Démarrage du serveur d'images…"})
                     deadline = time.monotonic() + 45
@@ -1073,9 +1281,13 @@ class LlamaCppBackend:
 
             raise RuntimeError("Impossible de démarrer stable-diffusion.cpp. " + " | ".join(startup_errors))
 
-    def load_image_catalog(self, model_dir):
+    def load_image_catalog(self, model_dir, memory_limit_gb=4, minimum_free_disk_gb=5):
         try:
-            port = self._start_sd_server(model_dir)
+            self.image_engine_memory_limit_gb = max(1, min(64, int(memory_limit_gb)))
+            self.image_minimum_free_disk_gb = max(1, min(100, int(minimum_free_disk_gb)))
+            port = self._start_sd_server(
+                model_dir, memory_limit_gb=self.image_engine_memory_limit_gb
+            )
             self._sd_api_request(port, "POST", "/sdcpp/v1/models/refresh", {})
             recipes = self._sd_api_request(port, "GET", "/sdcpp/v1/recipes")
             model_files = self._sd_api_request(port, "GET", "/sdcpp/v1/model-files")
@@ -1089,7 +1301,7 @@ class LlamaCppBackend:
         except Exception as error:
             self.send({"type": "image_error", "content": str(error)})
 
-    def _load_image_model(self, port, recipe, models):
+    def _load_image_model(self, port, recipe, models, request=None):
         config_key = (self._sd_server_model_dir, recipe, json.dumps(models, sort_keys=True, ensure_ascii=False))
         if self._sd_loaded_config == config_key:
             return
@@ -1117,6 +1329,13 @@ class LlamaCppBackend:
         loader.start()
         last_state = None
         while not finished.wait(1.0):
+            if request is not None:
+                try:
+                    self._check_image_storage_budget(request)
+                except ImageSafetyLimitError:
+                    self._stop_sd_server()
+                    loader.join(timeout=10)
+                    raise
             if self._cancel_requested.is_set():
                 self._stop_sd_server()
                 break
@@ -1155,6 +1374,12 @@ class LlamaCppBackend:
             pass
 
     @staticmethod
+    def _next_image_fallback_limit(width, height, _use_disk_for_memory):
+        limits = (512, 384, 256, 192, 128)
+        largest = max(int(width), int(height))
+        return next((limit for limit in limits if largest > limit), None)
+
+    @staticmethod
     def _image_model_root_for_file(model_path):
         image_file = Path(str(model_path or "")).expanduser().resolve()
         if not image_file.is_file():
@@ -1189,6 +1414,27 @@ class LlamaCppBackend:
                 Path(relative_path).name.casefold() == default_path.name.casefold())
 
     @classmethod
+    def _preferred_image_recipe_ids(cls, default_path):
+        name = re.sub(r"[^a-z0-9]+", "-", Path(default_path).stem.casefold()).strip("-")
+        if any(marker in name for marker in ("stable-diffusion-3", "sd3", "sd-3")):
+            return ["sd3-medium"]
+        if any(marker in name for marker in ("stable-diffusion-xl", "sdxl", "realvisxl", "juggernautxl", "dreamshaperxl")):
+            if "inpaint" in name:
+                return ["sdxl-inpainting", "sdxl-checkpoint"]
+            return ["sdxl-checkpoint"]
+        if any(marker in name for marker in ("v2-1", "sd2-1", "sd-2-1", "stable-diffusion-2-1")):
+            if "inpaint" in name:
+                return ["sd2-inpainting", "sd2-768-checkpoint", "sd2-512-checkpoint"]
+            if "768" in name:
+                return ["sd2-768-checkpoint"]
+            return ["sd2-512-checkpoint", "sd2-768-checkpoint"]
+        if any(marker in name for marker in ("v1-5", "v1-4", "sd1-5", "sd1-4", "sd-1-5", "sd-1-4", "stable-diffusion-v1")):
+            if "inpaint" in name:
+                return ["sd1-inpainting", "sd1-checkpoint"]
+            return ["sd1-checkpoint"]
+        return []
+
+    @classmethod
     def _choose_default_image_recipe(cls, recipes, model_files, source_root,
                                      catalog_root, default_path):
         preferred_ids = set()
@@ -1204,7 +1450,23 @@ class LlamaCppBackend:
                 "Place le fichier sous un dossier reconnu ou choisis-le à nouveau dans les paramètres."
             )
 
-        for recipe in recipes:
+        preferred_recipe_ids = cls._preferred_image_recipe_ids(default_path)
+        recipes_by_id = {
+            str(recipe.get("id") or "").strip(): recipe
+            for recipe in recipes if isinstance(recipe, dict) and str(recipe.get("id") or "").strip()
+        }
+        if preferred_recipe_ids:
+            candidates_to_check = [recipes_by_id[recipe_id] for recipe_id in preferred_recipe_ids
+                                   if recipe_id in recipes_by_id]
+            if not candidates_to_check:
+                raise RuntimeError(
+                    f"Le moteur d’images ne propose pas de profil pour la famille détectée dans « {default_path.name} »."
+                )
+        else:
+            candidates_to_check = list(recipes)
+
+        complete_candidates = []
+        for recipe in candidates_to_check:
             recipe_id = str(recipe.get("id") or "").strip()
             if not recipe_id:
                 continue
@@ -1269,7 +1531,15 @@ class LlamaCppBackend:
                 for model_file in selected_files.values()
             )
             if not required_missing and not groups_missing and preferred_selected:
-                return recipe, selected
+                complete_candidates.append((recipe, selected))
+
+        if complete_candidates and (preferred_recipe_ids or len(complete_candidates) == 1):
+            return complete_candidates[0]
+        if len(complete_candidates) > 1:
+            raise RuntimeError(
+                f"Plusieurs profils sont possibles pour « {default_path.name} ». "
+                "Choisis le profil correspondant dans la fenêtre de génération d’images."
+            )
 
         raise RuntimeError(
             f"Aucun profil complet ne peut charger le modèle par défaut « {default_path.name} ». "
@@ -1280,7 +1550,18 @@ class LlamaCppBackend:
         default_path = Path(default_image_model_path).expanduser().resolve()
         source_root = self._image_model_root_for_file(default_path)
         catalog_root = self._prepare_sd_model_root(source_root)
-        port = self._start_sd_server(source_root)
+        request = {
+            "model_dir": str(source_root),
+            "output_dir": str(self._generated_images_root()),
+            "image_engine_memory_limit_gb": self.image_engine_memory_limit_gb,
+            "image_minimum_free_disk_gb": self.image_minimum_free_disk_gb,
+        }
+        self._check_image_storage_budget(request)
+        port = self._start_sd_server(
+            source_root,
+            use_disk_for_memory=bool(getattr(self, "_use_disk_for_image_memory", False)),
+            memory_limit_gb=self.image_engine_memory_limit_gb
+        )
         self._sd_api_request(port, "POST", "/sdcpp/v1/models/refresh", {})
         recipes_response = self._sd_api_request(port, "GET", "/sdcpp/v1/recipes")
         files_response = self._sd_api_request(port, "GET", "/sdcpp/v1/model-files")
@@ -1316,8 +1597,7 @@ class LlamaCppBackend:
             "distilled_guidance", defaults.get("distilled_guidance", 3.5), 0.0, 50.0
         )
         seed = int(arguments.get("seed", -1))
-        request = {
-            "model_dir": str(source_root),
+        request.update({
             "recipe": recipe["id"],
             "models": selected_models,
             "prompt": prompt[:MAX_TOOL_TEXT_CHARS],
@@ -1328,11 +1608,11 @@ class LlamaCppBackend:
             "cfg_scale": cfg_scale,
             "distilled_guidance": distilled_guidance,
             "seed": seed,
-            "output_dir": str(self._generated_images_root()),
+            "use_disk_for_memory": bool(getattr(self, "_use_disk_for_image_memory", False)),
             "keep_text_model_loaded": True,
             "start_message": "Création de l’image demandée dans le chat…"
-        }
-        paths = self._run_image_generation(request)
+        })
+        paths = self._run_image_generation_preserving_text_model(request)
         if not paths:
             raise RuntimeError("La génération d’image a été annulée ou n’a renvoyé aucun fichier.")
 
@@ -1343,20 +1623,59 @@ class LlamaCppBackend:
         )
         if request.get("_resolution_fallback_attempted"):
             summary += " La résolution a été réduite automatiquement pour terminer la génération."
+        if request.get("_text_model_restore_error"):
+            summary += " Le modèle texte n’a pas pu être rechargé : " + str(request["_text_model_restore_error"])
         return {"text": summary, "image_paths": paths}
 
     def generate_image(self, request):
         try:
-            self._run_image_generation(request)
+            self._run_image_generation_preserving_text_model(request)
         except Exception:
             pass
         finally:
             self.end_generation()
 
+    def _run_image_generation_preserving_text_model(self, request):
+        with self._server_state_lock:
+            process = self._server_process
+            config = self._server_config if (
+                self._server_ready and process is not None and process.poll() is None
+            ) else None
+
+        if config:
+            self.send({
+                "type": "image_engine_status",
+                "content": "Libération temporaire de la mémoire du modèle texte…"
+            })
+            self.unload_model()
+        try:
+            return self._run_image_generation(request)
+        finally:
+            if config and not self._cancel_requested.is_set():
+                try:
+                    restored = self.load_model(
+                        config[0], ngl=config[2], threads=config[3],
+                        context_size=config[4], use_mmap=config[5]
+                    )
+                    if not restored:
+                        request["_text_model_restore_error"] = "le chargement a échoué."
+                except Exception as error:
+                    request["_text_model_restore_error"] = str(error)
+                    self.send({
+                        "type": "image_engine_status",
+                        "content": f"Impossible de recharger le modèle texte après l’image : {error}"
+                    })
+
     def _run_image_generation(self, request):
         job_id = None
         try:
             model_dir = request.get("model_dir", "")
+            request.setdefault(
+                "image_engine_memory_limit_gb", self.image_engine_memory_limit_gb
+            )
+            request.setdefault(
+                "image_minimum_free_disk_gb", self.image_minimum_free_disk_gb
+            )
             recipe = str(request.get("recipe", "")).strip()
             models = request.get("models", {})
             prompt = str(request.get("prompt", "")).strip()
@@ -1364,6 +1683,7 @@ class LlamaCppBackend:
                 raise RuntimeError("Choisissez un modèle d'images et écrivez une description.")
             if not isinstance(models, dict):
                 raise RuntimeError("La sélection des composants du modèle est invalide.")
+            self._check_image_storage_budget(request)
 
             self.send({
                 "type": "image_start",
@@ -1373,12 +1693,14 @@ class LlamaCppBackend:
                 self.unload_model()
             port = self._start_sd_server(
                 model_dir,
-                force_cpu=bool(request.get("_force_cpu"))
+                force_cpu=bool(request.get("_force_cpu")),
+                use_disk_for_memory=bool(request.get("use_disk_for_memory")),
+                memory_limit_gb=request["image_engine_memory_limit_gb"]
             )
             if self._cancel_requested.is_set():
                 self.send({"type": "image_complete", "cancelled": True})
                 return []
-            self._load_image_model(port, recipe, models)
+            self._load_image_model(port, recipe, models, request)
             if self._cancel_requested.is_set():
                 self.send({"type": "image_complete", "cancelled": True})
                 return []
@@ -1423,6 +1745,12 @@ class LlamaCppBackend:
             last_preview = None
             deadline = time.monotonic() + 7200
             while time.monotonic() < deadline:
+                try:
+                    self._check_image_storage_budget(request)
+                except ImageSafetyLimitError:
+                    self._cancel_sd_job(port, job_id)
+                    self._stop_sd_server()
+                    raise
                 status = self._sd_api_request(
                     port,
                     "GET",
@@ -1507,8 +1835,12 @@ class LlamaCppBackend:
                             if self._cancel_requested.is_set():
                                 self.send({"type": "image_complete", "cancelled": True})
                                 return []
-                            cpu_port = self._start_sd_server(model_dir, force_cpu=True)
-                            self._load_image_model(cpu_port, recipe, models)
+                            cpu_port = self._start_sd_server(
+                                model_dir, force_cpu=True,
+                                use_disk_for_memory=bool(request.get("use_disk_for_memory")),
+                                memory_limit_gb=request["image_engine_memory_limit_gb"]
+                            )
+                            self._load_image_model(cpu_port, recipe, models, request)
                             retry_request = dict(request)
                             retry_request["_cpu_fallback_attempted"] = True
                             retry_request["_force_cpu"] = True
@@ -1519,10 +1851,11 @@ class LlamaCppBackend:
                             request["_cpu_fallback_error_delegated"] = True
                             retry_request["_cpu_fallback_error_delegated"] = False
                             return self._run_image_generation(retry_request)
-                        if (self._sd_server_variant == "cpu"
-                                and not request.get("_resolution_fallback_attempted")
-                                and max(width, height) > 512):
-                            scale = min(1.0, 512.0 / max(width, height))
+                        fallback_limit = self._next_image_fallback_limit(
+                            width, height, bool(request.get("use_disk_for_memory"))
+                        )
+                        if self._sd_server_variant == "cpu" and fallback_limit:
+                            scale = min(1.0, fallback_limit / max(width, height))
                             retry_width = max(64, int(round(width * scale / 64.0)) * 64)
                             retry_height = max(64, int(round(height * scale / 64.0)) * 64)
                             if (retry_width < width or retry_height < height):
@@ -1584,7 +1917,7 @@ class LlamaCppBackend:
                 error,
                 (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException)
             )
-            if job_id and transport_failure:
+            if transport_failure:
                 current_variant = self._sd_server_variant
                 original_request = request.get("_original_request")
                 if not isinstance(original_request, dict):
@@ -1613,10 +1946,11 @@ class LlamaCppBackend:
 
                 width = int(request.get("width", 1024))
                 height = int(request.get("height", 1024))
-                if (current_variant == "cpu"
-                        and not request.get("_resolution_fallback_attempted")
-                        and max(width, height) > 512):
-                    scale = 512.0 / max(width, height)
+                fallback_limit = self._next_image_fallback_limit(
+                    width, height, bool(request.get("use_disk_for_memory"))
+                )
+                if job_id and current_variant == "cpu" and fallback_limit:
+                    scale = fallback_limit / max(width, height)
                     retry_width = max(64, int(round(width * scale / 64.0)) * 64)
                     retry_height = max(64, int(round(height * scale / 64.0)) * 64)
                     self.send({
@@ -1862,7 +2196,9 @@ class LlamaCppBackend:
                  code_execution_timeout_seconds=30, generated_images_directory=None,
                  enable_forum=False, enable_subagents=False,
                  available_subagent_models=None, available_local_models=None,
-                 ultra_lite=False, attachments=None, goal_mode=False):
+                 ultra_lite=False, attachments=None, goal_mode=False,
+                 enable_system_commands=False, use_disk_for_image_memory=False,
+                 image_engine_memory_limit_gb=4, image_minimum_free_disk_gb=5):
         """Generate through the persistent server; weights stay loaded between turns."""
         try:
             try:
@@ -1873,6 +2209,18 @@ class LlamaCppBackend:
                 self.code_execution_timeout_seconds = max(1, min(7200, int(code_execution_timeout_seconds)))
             except (TypeError, ValueError):
                 self.code_execution_timeout_seconds = 30
+            try:
+                self.image_engine_memory_limit_gb = max(
+                    1, min(64, int(image_engine_memory_limit_gb))
+                )
+            except (TypeError, ValueError):
+                self.image_engine_memory_limit_gb = 4
+            try:
+                self.image_minimum_free_disk_gb = max(
+                    1, min(100, int(image_minimum_free_disk_gb))
+                )
+            except (TypeError, ValueError):
+                self.image_minimum_free_disk_gb = 5
             if stream:
                 self.send({"type": "generation_start"})
             if str(generated_images_directory or "").strip():
@@ -1990,10 +2338,12 @@ class LlamaCppBackend:
 
             image_model_path = str(default_image_model_path or "").strip()
             enable_image_generation = bool(image_model_path and Path(image_model_path).is_file())
+            self._use_disk_for_image_memory = bool(use_disk_for_image_memory)
             # Keep every chat on the tool-aware path so list_local_models is always available.
             if (self._enabled_tool_names(
                     bool(enable_web_access), bool(enable_code_execution),
-                    enable_image_generation, bool(enable_forum))
+                    enable_image_generation, bool(enable_forum),
+                    bool(enable_system_commands))
                     or enable_subagents or goal_mode):
                 self._generate_with_tools(
                     prompt,
@@ -2001,6 +2351,7 @@ class LlamaCppBackend:
                     stream,
                     enable_web_access=bool(enable_web_access),
                     enable_code_execution=bool(enable_code_execution),
+                    enable_system_commands=bool(enable_system_commands),
                     code_workspace=code_workspace,
                     enable_image_generation=enable_image_generation,
                     default_image_model_path=image_model_path,
@@ -2010,11 +2361,13 @@ class LlamaCppBackend:
                     available_subagent_models=available_subagent_models,
                     available_local_models=available_local_models,
                     attachments=attachments,
+                    use_disk_for_image_memory=bool(use_disk_for_image_memory),
                     tool_options={
                         "ngl": ngl,
                         "threads": threads,
                         "context_size": context_size,
                         "use_mmap": use_mmap,
+                        "use_disk_for_image_memory": use_disk_for_image_memory,
                         "temperature": temperature,
                         "top_p": top_p,
                         "top_k": top_k,
@@ -2026,7 +2379,9 @@ class LlamaCppBackend:
                         "frequency_penalty": frequency_penalty,
                         "seed": seed,
                         "stop": stop or [],
-                        "reasoning_effort": reasoning_effort
+                        "reasoning_effort": reasoning_effort,
+                        "image_engine_memory_limit_gb": self.image_engine_memory_limit_gb,
+                        "image_minimum_free_disk_gb": self.image_minimum_free_disk_gb
                     }
                 )
             elif stream:
@@ -2690,13 +3045,16 @@ class LlamaCppBackend:
 
     @staticmethod
     def _enabled_tool_names(allow_web_access, allow_code_execution,
-                            allow_image_generation, allow_forum):
+                            allow_image_generation, allow_forum,
+                            allow_system_commands=False):
         enabled = {"list_local_models"}
         if allow_web_access:
             enabled.update(("web_search", "browse_url"))
         if allow_code_execution:
             enabled.update(("list_files", "read_file", "write_file", "run_python",
                             "list_images", "copy_image", "move_image"))
+        if allow_system_commands:
+            enabled.add("run_system_command")
         if allow_image_generation:
             enabled.add("generate_image")
         if allow_forum:
@@ -2707,7 +3065,8 @@ class LlamaCppBackend:
                            allow_image_generation=False, allow_forum=False,
                            allow_subagents=False, goal_mode=False,
                            available_subagent_models=None, tool_allowlist=None,
-                           available_subagent_tools=None):
+                           available_subagent_tools=None,
+                           allow_system_commands=False):
         tools = []
         tools.append(
             "list_local_models : affiche les modèles de texte locaux. Utilise-le si l'utilisateur demande les modèles ou si tu dois choisir un sous-agent. Recopie exactement le chemin retourné. offset et limit sont des nombres; limit vaut 1 à 100.\n"
@@ -2732,6 +3091,11 @@ class LlamaCppBackend:
                 'move_image : déplace ou renomme une image listée par list_images. destination_root vaut "images" (défaut) ou "project"; destination est relatif à ce dossier. Ne remplace aucun fichier existant.\n'
                 '<move_image>{"source":"image.png","destination":"assets/image.png","destination_root":"project"}</move_image>'
             ))
+        if allow_system_commands:
+            tools.append(
+                'run_system_command : lance une commande Windows directement avec les droits de votre session, sans shell implicite. executable est le programme (par exemple "git" ou "powershell.exe"); args est un tableau de chaînes. working_directory est un chemin relatif au dossier de travail; timeout_seconds est limité par le réglage. Cette commande peut modifier le système et lire tous les fichiers accessibles à l’utilisateur. Pour PowerShell, passe le script comme un seul argument après -Command.\n'
+                '<run_system_command>{"executable":"git","args":["--version"],"working_directory":".","timeout_seconds":30}</run_system_command>'
+            )
         if allow_image_generation:
             tools.append(
                 'generate_image : crée une image avec le modèle et le profil par défaut; elle apparaît dans le chat. prompt est obligatoire; les autres champs sont facultatifs. negative_prompt décrit ce qu’il faut éviter. width/height : 64–4096; steps : 1–200; cfg_scale/distilled_guidance : 0–50; seed=-1 choisit une graine aléatoire.\n'
@@ -3684,14 +4048,16 @@ class LlamaCppBackend:
                              enable_image_generation=False, default_image_model_path=None,
                              enable_forum=False, enable_subagents=False, goal_mode=False,
                              available_subagent_models=None, tool_options=None,
-                             available_local_models=None, attachments=None):
+                             available_local_models=None, attachments=None,
+                             enable_system_commands=False, use_disk_for_image_memory=False):
         messages = self._build_messages(history, prompt, attachments)
         task_message = messages[-1]
         base_system_prompt = ""
         if messages and messages[0].get("role") == "system":
             base_system_prompt = str(messages[0].get("content", ""))
         enabled_tool_names = self._enabled_tool_names(
-            enable_web_access, enable_code_execution, enable_image_generation, enable_forum
+            enable_web_access, enable_code_execution, enable_image_generation, enable_forum,
+            enable_system_commands
         )
         if enable_subagents:
             enabled_tool_names.update(("spawn_subagent", "subagent_forum_search"))
@@ -3704,7 +4070,8 @@ class LlamaCppBackend:
             enable_web_access, enable_code_execution, enable_image_generation, enable_forum,
             allow_subagents=enable_subagents, goal_mode=goal_mode,
             available_subagent_models=available_subagent_models,
-            available_subagent_tools=available_subagent_tools
+            available_subagent_tools=available_subagent_tools,
+            allow_system_commands=enable_system_commands
         )
         if messages and messages[0].get("role") == "system":
             messages[0]["content"] += tool_instructions
@@ -3962,7 +4329,9 @@ class LlamaCppBackend:
                     code_workspace=code_workspace,
                     default_image_model_path=default_image_model_path,
                     enable_forum=enable_forum,
-                    available_local_models=available_local_models
+                    available_local_models=available_local_models,
+                    enable_system_commands=enable_system_commands,
+                    use_disk_for_image_memory=use_disk_for_image_memory
                 )
                 if isinstance(tool_result, dict):
                     result = tool_result.get("text", "")
@@ -4166,6 +4535,22 @@ class LlamaCppBackend:
             selected_tools.add("goal_met")
 
         model_settings = dict(model_settings or {})
+        self._use_disk_for_image_memory = bool(
+            model_settings.get("use_disk_for_image_memory", False)
+        )
+        try:
+            self.image_engine_memory_limit_gb = max(
+                1, min(64, int(model_settings.get(
+                    "image_engine_memory_limit_gb", self.image_engine_memory_limit_gb
+                )))
+            )
+            self.image_minimum_free_disk_gb = max(
+                1, min(100, int(model_settings.get(
+                    "image_minimum_free_disk_gb", self.image_minimum_free_disk_gb
+                )))
+            )
+        except (TypeError, ValueError):
+            pass
         main_model_path = self.model_path
         ngl = model_settings.get("ngl", 99)
         threads = model_settings.get("threads")
@@ -4219,9 +4604,11 @@ class LlamaCppBackend:
             }))
             allow_image = "generate_image" in selected_tools
             allow_forum = bool(selected_tools.intersection({"forum_search", "forum_post"}))
+            allow_system_commands = "run_system_command" in selected_tools
             tool_instructions = self._tool_instructions(
                 allow_web, allow_code, allow_image, allow_forum,
-                goal_mode=goal_mode, tool_allowlist=selected_tools
+                goal_mode=goal_mode, tool_allowlist=selected_tools,
+                allow_system_commands=allow_system_commands
             )
             agent_system_prompt = (
                 (str(base_system_prompt).strip() + "\n\n") if str(base_system_prompt).strip() else ""
@@ -4305,7 +4692,11 @@ class LlamaCppBackend:
                         code_workspace=code_workspace,
                         default_image_model_path=default_image_model_path,
                         enable_forum=allow_forum,
-                        available_local_models=available_local_models
+                        available_local_models=available_local_models,
+                        enable_system_commands=allow_system_commands,
+                        use_disk_for_image_memory=bool(
+                            getattr(self, "_use_disk_for_image_memory", False)
+                        )
                     )
                     if isinstance(tool_result, dict):
                         result = str(tool_result.get("text", ""))
@@ -4509,6 +4900,7 @@ class LlamaCppBackend:
             "read_file": "Lecture du code…",
             "write_file": "Écriture du code…",
             "run_python": "Exécution du code Python…",
+            "run_system_command": "Exécution d’une commande système…",
             "list_images": "Recherche d’images…",
             "copy_image": "Copie d’une image dans le projet…",
             "move_image": "Déplacement/renommage d’une image…",
@@ -4524,7 +4916,9 @@ class LlamaCppBackend:
     def _execute_model_tool(self, name, arguments, enable_web_access,
                             enable_code_execution, code_workspace,
                             default_image_model_path=None, enable_forum=False,
-                            available_local_models=None):
+                            available_local_models=None,
+                            enable_system_commands=False,
+                            use_disk_for_image_memory=False):
         try:
             if name == "__invalid_tool_call__":
                 return "Erreur : l'appel d'outil était mal formé. Réessaie avec une balise et un objet JSON valides."
@@ -4566,9 +4960,12 @@ class LlamaCppBackend:
             if name in ("list_files", "read_file", "write_file", "run_python",
                         "list_images", "copy_image", "move_image") and enable_code_execution:
                 return self._execute_code_tool(name, arguments, code_workspace)
+            if name == "run_system_command" and enable_system_commands:
+                return self._execute_system_command_tool(arguments, code_workspace)
             if name == "generate_image":
                 if not default_image_model_path:
                     return "Erreur : aucun modèle d’image par défaut n’est défini. Choisis-en un dans Outils → Paramètres → Modèles par défaut."
+                self._use_disk_for_image_memory = bool(use_disk_for_image_memory)
                 return self._generate_image_tool(arguments, default_image_model_path)
             if name in ("forum_search", "forum_post") and enable_forum:
                 if name == "forum_search":
@@ -4960,6 +5357,103 @@ class LlamaCppBackend:
             action = "Image déplacée/renommée"
         return f"{action} : {destination} ({destination.stat().st_size} octets)."
 
+    def _execute_system_command_tool(self, arguments, workspace):
+        executable = str(arguments.get("executable", "")).strip()
+        if not executable or len(executable) > 1024:
+            return "Erreur : executable doit contenir le nom ou le chemin d’un programme."
+
+        raw_args = arguments.get("args", [])
+        if not isinstance(raw_args, list) or len(raw_args) > 100:
+            return "Erreur : args doit être un tableau JSON de 100 éléments maximum."
+        args = []
+        for value in raw_args:
+            if not isinstance(value, (str, int, float, bool)):
+                return "Erreur : chaque argument doit être une chaîne ou une valeur simple."
+            argument = str(value)
+            if len(argument) > 8192:
+                return "Erreur : un argument dépasse 8 192 caractères."
+            args.append(argument)
+
+        root = self._workspace_root(workspace)
+        working_directory = self._workspace_target(root, arguments.get("working_directory", "."))
+        if not working_directory.is_dir():
+            return "Erreur : working_directory doit désigner un dossier existant du dossier de travail."
+
+        configured_timeout = max(1, min(7200, int(self.code_execution_timeout_seconds)))
+        try:
+            timeout = max(1, min(configured_timeout, int(arguments.get("timeout_seconds", configured_timeout))))
+        except (TypeError, ValueError):
+            timeout = configured_timeout
+        command = [executable, *args]
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        process_options = {"creationflags": flags} if os.name == "nt" else {}
+        process = subprocess.Popen(
+            command,
+            cwd=str(working_directory),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+            shell=False,
+            **process_options
+        )
+        output_limit = MAX_TOOL_TEXT_CHARS * 4
+        captured = {"stdout": bytearray(), "stderr": bytearray()}
+
+        def drain(pipe, key):
+            try:
+                while True:
+                    chunk = pipe.read(4096)
+                    if not chunk:
+                        return
+                    remaining = output_limit - len(captured[key])
+                    if remaining > 0:
+                        captured[key].extend(chunk[:remaining])
+            except (OSError, ValueError):
+                return
+
+        readers = [
+            threading.Thread(target=drain, args=(process.stdout, "stdout"), daemon=True),
+            threading.Thread(target=drain, args=(process.stderr, "stderr"), daemon=True)
+        ]
+        with self._active_tool_process_lock:
+            self._active_tool_process = process
+        for reader in readers:
+            reader.start()
+        try:
+            try:
+                process.wait(timeout=timeout)
+                timed_out = False
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                self._terminate_process(process)
+            for reader in readers:
+                reader.join(timeout=2)
+            stdout = captured["stdout"].decode("utf-8", errors="replace")[-MAX_TOOL_TEXT_CHARS:]
+            stderr = captured["stderr"].decode("utf-8", errors="replace")[-MAX_TOOL_TEXT_CHARS:]
+            if timed_out:
+                status = f"Commande interrompue après {timeout} secondes."
+            elif self._cancel_requested.is_set():
+                status = "Commande interrompue à la demande de l’utilisateur."
+            else:
+                status = f"Code de sortie : {process.returncode}"
+            return (
+                f"Commande : {subprocess.list2cmdline(command)}\n"
+                f"Dossier : {working_directory}\n{status}\n"
+                f"Sortie standard :\n{stdout or '(vide)'}\n"
+                f"Erreurs :\n{stderr or '(vide)'}"
+            )[:MAX_TOOL_TEXT_CHARS]
+        finally:
+            with self._active_tool_process_lock:
+                if self._active_tool_process is process:
+                    self._active_tool_process = None
+            for pipe in (process.stdout, process.stderr):
+                if pipe is not None:
+                    try:
+                        pipe.close()
+                    except OSError:
+                        pass
+
     def _execute_code_tool(self, name, arguments, workspace):
         root = self._workspace_root(workspace)
         if name in ("list_images", "copy_image", "move_image"):
@@ -5313,6 +5807,7 @@ def main():
                 conversation_title_prompt = request.get("conversation_title_prompt")
                 enable_web_access = request.get("enable_web_access", False)
                 enable_code_execution = request.get("enable_code_execution", False)
+                enable_system_commands = request.get("enable_system_commands", False)
                 code_workspace = request.get("code_workspace", "")
                 ngl = request.get("ngl", 99)
                 threads = request.get("threads", None)
@@ -5330,6 +5825,9 @@ def main():
                 ultra_lite = request.get("ultra_lite", False)
                 attachments = request.get("attachments", [])
                 goal_mode = request.get("goal_mode", False)
+                use_disk_for_image_memory = request.get("use_disk_for_image_memory", False)
+                image_engine_memory_limit_gb = request.get("image_engine_memory_limit_gb", 4)
+                image_minimum_free_disk_gb = request.get("image_minimum_free_disk_gb", 5)
 
                 if not backend.begin_generation():
                     backend.send({"type": "error", "content": "Une generation est deja en cours."})
@@ -5349,7 +5847,9 @@ def main():
                               generation_timeout_seconds, code_execution_timeout_seconds,
                               generated_images_directory, enable_forum, enable_subagents,
                               available_subagent_models, available_local_models, ultra_lite,
-                              attachments, goal_mode),
+                               attachments, goal_mode, enable_system_commands,
+                               use_disk_for_image_memory, image_engine_memory_limit_gb,
+                               image_minimum_free_disk_gb),
                         daemon=False  # Non-daemon so we can wait
                     )
                     t.start()
@@ -5365,7 +5865,9 @@ def main():
             elif req_type == "image_catalog":
                 t = threading.Thread(
                     target=backend.load_image_catalog,
-                    args=(request.get("model_dir", ""),),
+                    args=(request.get("model_dir", ""),
+                          request.get("image_engine_memory_limit_gb", 4),
+                          request.get("image_minimum_free_disk_gb", 5)),
                     daemon=False
                 )
                 t.start()

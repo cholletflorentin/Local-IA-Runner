@@ -619,30 +619,28 @@ public sealed class ChatPanel : DoubleBufferedPanel
     {
         var thinking = new StringBuilder();
         var response = new StringBuilder();
-        var target = response;
         var position = 0;
         while (position < content.Length)
         {
             var openIndex = content.IndexOf("<think>", position, StringComparison.OrdinalIgnoreCase);
-            var closeIndex = content.IndexOf("</think>", position, StringComparison.OrdinalIgnoreCase);
-            var opening = openIndex >= 0 && (closeIndex < 0 || openIndex < closeIndex);
-            var tagIndex = opening ? openIndex : closeIndex;
-            if (tagIndex < 0)
+            if (openIndex < 0)
             {
-                target.Append(content, position, content.Length - position);
+                response.Append(content, position, content.Length - position);
                 break;
             }
-            target.Append(content, position, tagIndex - position);
-            if (opening)
+
+            var closeIndex = content.IndexOf("</think>", openIndex + 7, StringComparison.OrdinalIgnoreCase);
+            if (closeIndex < 0)
             {
-                target = thinking;
-                position = tagIndex + 7;
+                // An unclosed marker may be literal answer text. Keep it in the
+                // response instead of hiding everything after it as reasoning.
+                response.Append(content, position, content.Length - position);
+                break;
             }
-            else
-            {
-                target = response;
-                position = tagIndex + 8;
-            }
+
+            response.Append(content, position, openIndex - position);
+            thinking.Append(content, openIndex + 7, closeIndex - openIndex - 7);
+            position = closeIndex + 8;
         }
         return (thinking.ToString().Trim(), response.ToString().Trim());
     }

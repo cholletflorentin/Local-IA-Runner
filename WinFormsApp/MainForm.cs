@@ -315,12 +315,22 @@ namespace LocalAIApp
                     var settings = JsonConvert.DeserializeObject<AppSettings>(json);
                     if (settings != null)
                     {
+                        var migrateMemorySettings = !settings.MemoryOptionsInitialized;
+                        if (migrateMemorySettings)
+                        {
+                            // The previous release enabled text mmap for every user by default.
+                            // Treat that old implicit value as opt-out during the first upgrade.
+                            settings.UseMmapForModel = false;
+                            settings.MemoryOptionsInitialized = true;
+                        }
                         // Upgrade the previous built-in system prompt to the new empty default.
                         if (string.Equals(settings.SystemPrompt,
                             "Tu es un assistant IA utile et amical. Reponds en francais de maniere claire et concise.",
                             StringComparison.Ordinal))
                             settings.SystemPrompt = "";
                         _appSettings = settings;
+                        if (migrateMemorySettings)
+                            SaveAppSettings();
                     }
                 }
             }
@@ -1758,12 +1768,16 @@ namespace LocalAIApp
                     ultra_lite = _appSettings.UltraLiteMode,
                     enable_web_access = !_appSettings.UltraLiteMode && _appSettings.EnableWebAccess,
                     enable_code_execution = !_appSettings.UltraLiteMode && _appSettings.EnableCodeExecution,
+                    enable_system_commands = !_appSettings.UltraLiteMode && _appSettings.EnableSystemCommands,
                     enable_forum = !_appSettings.UltraLiteMode && _appSettings.EnableForum,
                     enable_subagents = !_appSettings.UltraLiteMode && _appSettings.EnableSubagents,
                     available_local_models = _appSettings.UltraLiteMode ? Array.Empty<string>() : GetAvailableLocalModelPaths(),
                     available_subagent_models = _appSettings.UltraLiteMode ? Array.Empty<string>() : GetAvailableSubagentModelPaths(),
                     code_workspace = _appSettings.UltraLiteMode ? "" : _appSettings.CodeWorkspace,
                     default_image_model_path = _appSettings.UltraLiteMode ? "" : _appSettings.DefaultImageModelPath,
+                    use_disk_for_image_memory = !_appSettings.UltraLiteMode && _appSettings.UseDiskForImageMemory,
+                    image_engine_memory_limit_gb = _appSettings.ImageEngineMemoryLimitGb,
+                    image_minimum_free_disk_gb = _appSettings.ImageMinimumFreeDiskGb,
                     generation_timeout_seconds = _appSettings.GenerationTimeoutSeconds,
                     code_execution_timeout_seconds = _appSettings.CodeExecutionTimeoutSeconds,
                     generated_images_directory = ImageGeneratorForm.GetConfiguredOutputDirectory()
@@ -2087,9 +2101,19 @@ namespace LocalAIApp
                 return;
             }
 
-            _imageGeneratorForm = new ImageGeneratorForm(_appSettings.DefaultImageModelPath);
+            _imageGeneratorForm = new ImageGeneratorForm(
+                _appSettings.DefaultImageModelPath,
+                _appSettings.UseDiskForImageMemory,
+                _appSettings.ImageEngineMemoryLimitGb,
+                _appSettings.ImageMinimumFreeDiskGb);
             _imageGeneratorForm.CatalogRequested += (s, modelDir) =>
-                SendImageBackendRequest(new { type = "image_catalog", model_dir = modelDir });
+                SendImageBackendRequest(new
+                {
+                    type = "image_catalog",
+                    model_dir = modelDir,
+                    image_engine_memory_limit_gb = _appSettings.ImageEngineMemoryLimitGb,
+                    image_minimum_free_disk_gb = _appSettings.ImageMinimumFreeDiskGb
+                });
             _imageGeneratorForm.GenerateRequested += (s, request) => SendImageBackendRequest(request);
             _imageGeneratorForm.CancelRequested += (s, e) => SendImageBackendRequest(new { type = "cancel" });
             _imageGeneratorForm.FormClosed += (s, e) =>
@@ -2706,6 +2730,10 @@ namespace LocalAIApp
         public bool UltraLiteMode { get; set; } = false;
         public bool EnableWebAccess { get; set; } = true;
         public bool EnableCodeExecution { get; set; } = false;
+        public bool EnableSystemCommands { get; set; } = false;
+        public bool UseDiskForImageMemory { get; set; } = false;
+        public int ImageEngineMemoryLimitGb { get; set; } = 4;
+        public int ImageMinimumFreeDiskGb { get; set; } = 5;
         public bool EnableForum { get; set; } = false;
         public bool EnableSubagents { get; set; } = false;
         public bool SearchAllDrivesForModels { get; set; } = false;
@@ -2727,7 +2755,8 @@ namespace LocalAIApp
         public int ContextSize { get; set; } = 4096;
         public int Ngl { get; set; } = 99; // GPU layers
         public int Threads { get; set; } = 0; // 0 = auto
-        public bool UseMmapForModel { get; set; } = true;
+        public bool UseMmapForModel { get; set; } = false;
+        public bool MemoryOptionsInitialized { get; set; } = false;
         public string ReasoningEffort { get; set; } = "default";
         public int GenerationTimeoutSeconds { get; set; } = 900;
         public int CodeExecutionTimeoutSeconds { get; set; } = 30;
@@ -4599,6 +4628,7 @@ namespace LocalAIApp
         private ModernTextBox _defaultImageModelPathTextBox = null!;
         private CheckBox _webAccessCheckBox = null!;
         private CheckBox _codeExecutionCheckBox = null!;
+        private CheckBox _systemCommandCheckBox = null!;
         private CheckBox _forumEnabledCheckBox = null!;
         private CheckBox _subagentsEnabledCheckBox = null!;
         private CheckBox _autoUpdateCheckBox = null!;
@@ -4606,6 +4636,9 @@ namespace LocalAIApp
         private CheckBox _darkModeCheckBox = null!;
         private CheckBox _showGenerationSpeedCheckBox = null!;
         private CheckBox _ssdModelMemoryCheckBox = null!;
+        private CheckBox _imageDiskMemoryCheckBox = null!;
+        private ModernNumericUpDown _imageMemoryLimitUpDown = null!;
+        private ModernNumericUpDown _imageMinimumFreeDiskUpDown = null!;
         private ModernTextBox _codeWorkspaceTextBox = null!;
         private ComboBox _reasoningEffortComboBox = null!;
         private ModernNumericUpDown _temperatureUpDown;
@@ -4640,6 +4673,10 @@ namespace LocalAIApp
                 SearchAllDrivesForModels = currentSettings.SearchAllDrivesForModels,
                 EnableWebAccess = currentSettings.EnableWebAccess,
                 EnableCodeExecution = currentSettings.EnableCodeExecution,
+                EnableSystemCommands = currentSettings.EnableSystemCommands,
+                UseDiskForImageMemory = currentSettings.UseDiskForImageMemory,
+                ImageEngineMemoryLimitGb = currentSettings.ImageEngineMemoryLimitGb,
+                ImageMinimumFreeDiskGb = currentSettings.ImageMinimumFreeDiskGb,
                 EnableForum = currentSettings.EnableForum,
                 EnableSubagents = currentSettings.EnableSubagents,
                 AutoUpdateEnabled = currentSettings.AutoUpdateEnabled,
@@ -4663,6 +4700,7 @@ namespace LocalAIApp
                 Ngl = currentSettings.Ngl,
                 Threads = currentSettings.Threads,
                 UseMmapForModel = currentSettings.UseMmapForModel,
+                MemoryOptionsInitialized = currentSettings.MemoryOptionsInitialized,
                 ReasoningEffort = currentSettings.ReasoningEffort ?? "default",
                 GenerationTimeoutSeconds = Math.Clamp(currentSettings.GenerationTimeoutSeconds, 30, 7200),
                 CodeExecutionTimeoutSeconds = Math.Clamp(currentSettings.CodeExecutionTimeoutSeconds, 1, 7200)
@@ -4846,8 +4884,21 @@ namespace LocalAIApp
             };
             content.Controls.Add(CreateSettingCard(
                 "Écriture de fichiers et exécution Python",
-                "Autorise le modèle à lire/écrire dans le dossier choisi et à lancer du Python avec les droits de votre session Windows.",
+                "Autorise les outils de fichiers dans le dossier choisi et Python avec les droits de votre session Windows. Un script Python peut lui-même lancer des commandes système.",
                 _codeExecutionCheckBox));
+
+            _systemCommandCheckBox = new CheckBox
+            {
+                Text = "Autoriser",
+                AutoSize = true,
+                ForeColor = ThemeColors.TextPrimary,
+                BackColor = ThemeColors.Surface,
+                FlatStyle = FlatStyle.Flat
+            };
+            content.Controls.Add(CreateSettingCard(
+                "Commandes système directes",
+                "Désactivé par défaut. Ajoute l’outil run_system_command. Une commande s’exécute avec les droits de votre session Windows et peut lire ou modifier le système. Le dossier de départ reste limité au dossier de travail. Si Python est activé, un script Python peut aussi lancer des commandes.",
+                _systemCommandCheckBox));
 
             _forumEnabledCheckBox = new CheckBox
             {
@@ -4944,8 +4995,8 @@ namespace LocalAIApp
 
             _codeExecutionTimeoutUpDown = CreateNumericControl(1, 7200, 1, 0, 150);
             content.Controls.Add(CreateSettingCard(
-                "Délai maximal d’exécution Python (secondes)",
-                "Plafond du temps accordé à chaque script Python. Le modèle peut demander moins, mais ne peut pas dépasser cette valeur. Valeur par défaut : 30 secondes.",
+                "Délai maximal des scripts et commandes (secondes)",
+                "Plafond du temps accordé à chaque script Python ou commande système. Le modèle peut demander moins, mais ne peut pas dépasser cette valeur. Valeur par défaut : 30 secondes.",
                 _codeExecutionTimeoutUpDown));
 
             _contextSizeUpDown = CreateNumericControl(128, 131072, 128, 0, 150);
@@ -5055,9 +5106,34 @@ namespace LocalAIApp
                 FlatStyle = FlatStyle.Flat
             };
             content.Controls.Add(CreateSettingCard(
-                "Charger les poids du modèle depuis le SSD (mmap)",
-                "Activé par défaut et recommandé, surtout pour les modèles volumineux. Le mapping GGUF réduit la RAM résidente mais peut ralentir les accès disque; évitez de le désactiver sauf si vous avez assez de RAM. Appliqué au prochain chargement du modèle.",
+                "Mapper les poids du modèle texte depuis le SSD (mmap)",
+                "Désactivé par défaut. Le moteur lit les poids GGUF depuis le fichier au lieu de les charger tous immédiatement en RAM. Windows peut paginer les données; cela peut ralentir le modèle. Appliqué au prochain chargement.",
                 _ssdModelMemoryCheckBox));
+
+            _imageDiskMemoryCheckBox = new CheckBox
+            {
+                Text = "Forcer le CPU",
+                AutoSize = true,
+                ForeColor = ThemeColors.TextPrimary,
+                BackColor = ThemeColors.Surface,
+                FlatStyle = FlatStyle.Flat
+            };
+            content.Controls.Add(CreateSettingCard(
+                "Mode CPU sécurisé pour les images",
+                "Désactivé par défaut. Force le moteur sur le processeur pour éviter qu’un GPU intégré réserve trop de mémoire partagée. En cas de manque de mémoire, l’application essaie des résolutions plus petites. Le checkpoint reste dans son dossier; aucune copie complète n’est faite dans AppData.",
+                _imageDiskMemoryCheckBox));
+
+            _imageMemoryLimitUpDown = CreateNumericControl(1, 64, 1, 0, 150);
+            content.Controls.Add(CreateSettingCard(
+                "Limite mémoire du moteur d’image (Gio)",
+                "Plafond dur RAM + mémoire virtuelle du processus du moteur. Valeur par défaut : 4 Gio. Si le moteur atteint cette limite, il s’arrête et l’application réessaie à une résolution plus petite au lieu de laisser le fichier d’échange grossir sans borne.",
+                _imageMemoryLimitUpDown));
+
+            _imageMinimumFreeDiskUpDown = CreateNumericControl(1, 100, 1, 0, 150);
+            content.Controls.Add(CreateSettingCard(
+                "Espace disque libre à préserver (Gio)",
+                "La génération est refusée ou arrêtée si le disque système ou le dossier de sortie passe sous ce seuil. Réglage par défaut : 5 Gio.",
+                _imageMinimumFreeDiskUpDown));
 
             _nglUpDown = CreateNumericControl(-1, 999, 1, 0, 150);
             content.Controls.Add(CreateSettingCard(
@@ -5265,6 +5341,7 @@ namespace LocalAIApp
             _searchAllModelDrivesCheckBox.Checked = Settings.SearchAllDrivesForModels;
             _webAccessCheckBox.Checked = Settings.EnableWebAccess;
             _codeExecutionCheckBox.Checked = Settings.EnableCodeExecution;
+            _systemCommandCheckBox.Checked = Settings.EnableSystemCommands;
             _forumEnabledCheckBox.Checked = Settings.EnableForum;
             _subagentsEnabledCheckBox.Checked = Settings.EnableSubagents;
             _autoUpdateCheckBox.Checked = Settings.AutoUpdateEnabled;
@@ -5288,6 +5365,9 @@ namespace LocalAIApp
             SetNumericValue(_generationTimeoutUpDown, Settings.GenerationTimeoutSeconds);
             SetNumericValue(_codeExecutionTimeoutUpDown, Settings.CodeExecutionTimeoutSeconds);
             _ssdModelMemoryCheckBox.Checked = Settings.UseMmapForModel;
+            _imageDiskMemoryCheckBox.Checked = Settings.UseDiskForImageMemory;
+            SetNumericValue(_imageMemoryLimitUpDown, Settings.ImageEngineMemoryLimitGb);
+            SetNumericValue(_imageMinimumFreeDiskUpDown, Settings.ImageMinimumFreeDiskGb);
             var reasoningEffortValues = new[] { "default", "none", "minimal", "low", "medium", "high", "xhigh", "max" };
             var selectedEffort = Array.IndexOf(reasoningEffortValues,
                 (Settings.ReasoningEffort ?? "default").Trim().ToLowerInvariant());
@@ -5304,6 +5384,7 @@ namespace LocalAIApp
             Settings.SearchAllDrivesForModels = _searchAllModelDrivesCheckBox.Checked;
             Settings.EnableWebAccess = _webAccessCheckBox.Checked;
             Settings.EnableCodeExecution = _codeExecutionCheckBox.Checked;
+            Settings.EnableSystemCommands = _systemCommandCheckBox.Checked;
             Settings.EnableForum = _forumEnabledCheckBox.Checked;
             Settings.EnableSubagents = _subagentsEnabledCheckBox.Checked;
             Settings.AutoUpdateEnabled = _autoUpdateCheckBox.Checked;
@@ -5329,6 +5410,10 @@ namespace LocalAIApp
             Settings.GenerationTimeoutSeconds = (int)_generationTimeoutUpDown.Value;
             Settings.CodeExecutionTimeoutSeconds = (int)_codeExecutionTimeoutUpDown.Value;
             Settings.UseMmapForModel = _ssdModelMemoryCheckBox.Checked;
+            Settings.UseDiskForImageMemory = _imageDiskMemoryCheckBox.Checked;
+            Settings.ImageEngineMemoryLimitGb = (int)_imageMemoryLimitUpDown.Value;
+            Settings.ImageMinimumFreeDiskGb = (int)_imageMinimumFreeDiskUpDown.Value;
+            Settings.MemoryOptionsInitialized = true;
             var reasoningEffortValues = new[] { "default", "none", "minimal", "low", "medium", "high", "xhigh", "max" };
             var effortIndex = Math.Clamp(_reasoningEffortComboBox.SelectedIndex, 0, reasoningEffortValues.Length - 1);
             Settings.ReasoningEffort = reasoningEffortValues[effortIndex];

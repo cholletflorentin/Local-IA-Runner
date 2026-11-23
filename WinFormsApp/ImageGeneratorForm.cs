@@ -114,14 +114,21 @@ namespace LocalAIApp
         private readonly List<ImageModelFileInfo> _modelFiles = new();
         private readonly string _settingsFile;
         private readonly string _defaultModelPath;
+        private readonly bool _useDiskForImageMemory;
+        private readonly int _imageMemoryLimitGb;
+        private readonly int _imageMinimumFreeDiskGb;
         private List<ImageRecipeInfo> _recipes = new();
         private bool _busy;
         private bool _catalogLoading;
         private bool _cancellationRequested;
 
-        public ImageGeneratorForm(string? defaultModelPath = null)
+        public ImageGeneratorForm(string? defaultModelPath = null, bool useDiskForImageMemory = false,
+            int imageMemoryLimitGb = 4, int imageMinimumFreeDiskGb = 5)
         {
             _defaultModelPath = defaultModelPath?.Trim() ?? "";
+            _useDiskForImageMemory = useDiskForImageMemory;
+            _imageMemoryLimitGb = Math.Clamp(imageMemoryLimitGb, 1, 64);
+            _imageMinimumFreeDiskGb = Math.Clamp(imageMinimumFreeDiskGb, 1, 100);
             Text = "Génération d'images";
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
             StartPosition = FormStartPosition.CenterParent;
@@ -487,6 +494,44 @@ namespace LocalAIApp
             }
         }
 
+        private static List<string> PreferredRecipeIdsForModel(string modelPath)
+        {
+            var fileName = Path.GetFileNameWithoutExtension(modelPath ?? "").ToLowerInvariant();
+            var normalized = new string(fileName.Select(character =>
+                char.IsLetterOrDigit(character) ? character : '-').ToArray());
+            while (normalized.Contains("--", StringComparison.Ordinal))
+                normalized = normalized.Replace("--", "-", StringComparison.Ordinal);
+
+            if (normalized.Contains("stable-diffusion-3", StringComparison.Ordinal) ||
+                normalized.Contains("sd3", StringComparison.Ordinal) ||
+                normalized.Contains("sd-3", StringComparison.Ordinal))
+                return new List<string> { "sd3-medium" };
+
+            if (new[] { "stable-diffusion-xl", "sdxl", "realvisxl", "juggernautxl", "dreamshaperxl" }
+                .Any(marker => normalized.Contains(marker, StringComparison.Ordinal)))
+                return normalized.Contains("inpaint", StringComparison.Ordinal)
+                    ? new List<string> { "sdxl-inpainting", "sdxl-checkpoint" }
+                    : new List<string> { "sdxl-checkpoint" };
+
+            if (new[] { "v2-1", "sd2-1", "sd-2-1", "stable-diffusion-2-1" }
+                .Any(marker => normalized.Contains(marker, StringComparison.Ordinal)))
+            {
+                if (normalized.Contains("inpaint", StringComparison.Ordinal))
+                    return new List<string> { "sd2-inpainting", "sd2-768-checkpoint", "sd2-512-checkpoint" };
+                return normalized.Contains("768", StringComparison.Ordinal)
+                    ? new List<string> { "sd2-768-checkpoint" }
+                    : new List<string> { "sd2-512-checkpoint", "sd2-768-checkpoint" };
+            }
+
+            if (new[] { "v1-5", "v1-4", "sd1-5", "sd1-4", "sd-1-5", "sd-1-4", "stable-diffusion-v1" }
+                .Any(marker => normalized.Contains(marker, StringComparison.Ordinal)))
+                return normalized.Contains("inpaint", StringComparison.Ordinal)
+                    ? new List<string> { "sd1-inpainting", "sd1-checkpoint" }
+                    : new List<string> { "sd1-checkpoint" };
+
+            return new List<string>();
+        }
+
         private int FindDefaultRecipeIndex()
         {
             var bestPartialIndex = -1;
@@ -497,7 +542,17 @@ namespace LocalAIApp
             var bestPreferredMissingCount = int.MaxValue;
             var firstCompleteIndex = -1;
 
-            for (var recipeIndex = 0; recipeIndex < _recipes.Count; recipeIndex++)
+            var preferredRecipeIds = PreferredRecipeIdsForModel(_defaultModelPath);
+            var recipeIndices = Enumerable.Range(0, _recipes.Count);
+            if (preferredRecipeIds.Count > 0)
+            {
+                recipeIndices = recipeIndices
+                    .Where(index => preferredRecipeIds.Contains(_recipes[index].Id ?? "", StringComparer.OrdinalIgnoreCase))
+                    .OrderBy(index => preferredRecipeIds.FindIndex(id =>
+                        string.Equals(id, _recipes[index].Id, StringComparison.OrdinalIgnoreCase)));
+            }
+
+            foreach (var recipeIndex in recipeIndices)
             {
                 var recipe = _recipes[recipeIndex];
                 var slots = recipe.Slots ?? new List<ImageModelSlotInfo>();
@@ -702,7 +757,10 @@ namespace LocalAIApp
                 cfg_scale = (double)_cfgBox.Value,
                 distilled_guidance = (double)_guidanceBox.Value,
                 seed = (long)_seedBox.Value,
-                output_dir = _outputDirectoryBox.Text.Trim()
+                output_dir = _outputDirectoryBox.Text.Trim(),
+                use_disk_for_memory = _useDiskForImageMemory,
+                image_engine_memory_limit_gb = _imageMemoryLimitGb,
+                image_minimum_free_disk_gb = _imageMinimumFreeDiskGb
             });
         }
 
