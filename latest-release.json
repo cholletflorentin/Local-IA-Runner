@@ -1,19 +1,19 @@
 {
-  "tag_name": "v1.0.58",
-  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.58",
-  "body": "## Nouveautés de Local IA Runner 1.0.58\r\n\r\n### Protéger le disque pendant la génération d’images\n\n### Changements\r\n- Plafonner la mémoire engagée du moteur d’image à 4 Gio par défaut, avec une limite réglable.\r\n- Arrêter une génération si l’espace libre du disque système ou de sortie passe sous le seuil réglé (5 Gio par défaut).\r\n- Faire les reprises CPU à des résolutions décroissantes; le mode CPU sécurisé n’active plus les options disque qui ont saturé le PC.\r\n- Garder le catalogue de liens durs des checkpoints à côté des modèles et retirer les anciens liens d’AppData sans supprimer les fichiers sources.\r\n- Conserver dans la réponse les balises <think> non terminées au lieu de masquer le texte.\r\n- Garder l’accès direct aux commandes système sous une permission séparée, désactivée par défaut.\r\n\r\n### Vérifications\r\n- Compilation Release .NET réussie; le projet garde 121 avertissements existants.\r\n- Syntaxe Python vérifiée et test contrôlé de l’application de la limite mémoire Windows réussi.\r\n- Aucune génération réelle n’a été relancée après le signalement de saturation du disque.\r\n\r\n## Téléchargements\r\n\r\n- LocalIARunner-Setup-x64.exe : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.\r\n- LocalIARunner-Portable-x64-1.0.58.zip : version portable à extraire et lancer.\r\n\r\nLes modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.",
+  "tag_name": "v1.0.59",
+  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.59",
+  "body": "## Nouveautés de Local IA Runner 1.0.59\r\n\r\n- Corriger le suivi à onglets\r\n\r\n## Téléchargements\r\n\r\n- LocalIARunner-Setup-x64.exe : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.\r\n- LocalIARunner-Portable-x64-1.0.59.zip : version portable à extraire et lancer.\r\n\r\nLes modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.",
   "assets": [
     {
       "name": "LocalIARunner-Setup-x64.exe",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.58/LocalIARunner-Setup-x64.exe",
-      "digest": "sha256:5e358d14f850e24c0188155dae93d102be73ed37ae4c9d349944a688be155a19",
-      "size": 98268097
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.59/LocalIARunner-Setup-x64.exe",
+      "digest": "sha256:938a392ca56b3bb16299c81cb8c287621924a01c976a8e3522e7b875ae666f64",
+      "size": 98276356
     },
     {
-      "name": "LocalIARunner-Portable-x64-1.0.58.zip",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.58/LocalIARunner-Portable-x64-1.0.58.zip",
-      "digest": "sha256:ba8b1ccb3214d607c57467a2fee99ebb6334f662f9e89c9e3088c1d629c1e1f2",
-      "size": 142192199
+      "name": "LocalIARunner-Portable-x64-1.0.59.zip",
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.59/LocalIARunner-Portable-x64-1.0.59.zip",
+      "digest": "sha256:c00d94e71290e505c8ccfa27886b24a6bc37ebf11f53279dd93269d51bd72099",
+      "size": 142196691
     }
   ]
 }
