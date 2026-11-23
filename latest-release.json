@@ -1,19 +1,19 @@
 {
-  "tag_name": "v1.0.57",
-  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.57",
-  "body": "## Nouveautés de Local IA Runner 1.0.57\r\n\r\n### Corriger génération d’image, réflexion et mmproj\n\n### Bugs corrigés\r\n- Reprendre la génération d’image sur CPU si Vulkan échoue ou si le serveur Vulkan tombe pendant l’inférence; en cas d’échec CPU à grande résolution, réduire à 512 px et réessayer.\r\n- Garder une graine stable entre les reprises et afficher la taille finale utilisée.\r\n- Ne plus classer une réponse normale comme réflexion en réutilisant une ancienne réflexion du flux.\r\n- Associer les mmproj uniquement à un modèle dont le nom correspond clairement; limiter le projecteur générique au dossier contenant un seul modèle.\r\n\r\n### Vérification\r\n- Compilation Release .NET réussie.\r\n- Syntaxe du backend Python vérifiée.\r\n- La génération réelle n’a pas été relancée sur le moteur local pendant cette validation.\r\n\r\n## Téléchargements\r\n\r\n- LocalIARunner-Setup-x64.exe : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.\r\n- LocalIARunner-Portable-x64-1.0.57.zip : version portable à extraire et lancer.\r\n\r\nLes modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.",
+  "tag_name": "v1.0.58",
+  "html_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/v1.0.58",
+  "body": "## Nouveautés de Local IA Runner 1.0.58\r\n\r\n### Protéger le disque pendant la génération d’images\n\n### Changements\r\n- Plafonner la mémoire engagée du moteur d’image à 4 Gio par défaut, avec une limite réglable.\r\n- Arrêter une génération si l’espace libre du disque système ou de sortie passe sous le seuil réglé (5 Gio par défaut).\r\n- Faire les reprises CPU à des résolutions décroissantes; le mode CPU sécurisé n’active plus les options disque qui ont saturé le PC.\r\n- Garder le catalogue de liens durs des checkpoints à côté des modèles et retirer les anciens liens d’AppData sans supprimer les fichiers sources.\r\n- Conserver dans la réponse les balises <think> non terminées au lieu de masquer le texte.\r\n- Garder l’accès direct aux commandes système sous une permission séparée, désactivée par défaut.\r\n\r\n### Vérifications\r\n- Compilation Release .NET réussie; le projet garde 121 avertissements existants.\r\n- Syntaxe Python vérifiée et test contrôlé de l’application de la limite mémoire Windows réussi.\r\n- Aucune génération réelle n’a été relancée après le signalement de saturation du disque.\r\n\r\n## Téléchargements\r\n\r\n- LocalIARunner-Setup-x64.exe : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.\r\n- LocalIARunner-Portable-x64-1.0.58.zip : version portable à extraire et lancer.\r\n\r\nLes modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.",
   "assets": [
     {
       "name": "LocalIARunner-Setup-x64.exe",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.57/LocalIARunner-Setup-x64.exe",
-      "digest": "sha256:426719469060480459343bc23a57515999896ee580a0077cf7f0966929482f15",
-      "size": 98263175
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.58/LocalIARunner-Setup-x64.exe",
+      "digest": "sha256:5e358d14f850e24c0188155dae93d102be73ed37ae4c9d349944a688be155a19",
+      "size": 98268097
     },
     {
-      "name": "LocalIARunner-Portable-x64-1.0.57.zip",
-      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.57/LocalIARunner-Portable-x64-1.0.57.zip",
-      "digest": "sha256:05acf3bd238806fde304973294ee108a4f0f2eddd7dbc41ec79cef7ed07f532e",
-      "size": 142184949
+      "name": "LocalIARunner-Portable-x64-1.0.58.zip",
+      "browser_download_url": "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/v1.0.58/LocalIARunner-Portable-x64-1.0.58.zip",
+      "digest": "sha256:ba8b1ccb3214d607c57467a2fee99ebb6334f662f9e89c9e3088c1d629c1e1f2",
+      "size": 142192199
     }
   ]
 }
