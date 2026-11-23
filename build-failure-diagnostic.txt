@@ -1,0 +1,11 @@
+## Build failure details
+
+```text
+dotnet publish a échoué avec le code 1
+D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(330,17): error CS0117: 'SubagentActivityForm.AgentActivityPane' does not contain a definition for 'ActivityId' [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
+D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\MainForm.cs(2852,23): warning CS8618: Non-nullable property 'Error' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the property as nullable. [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
+D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\MainForm.cs(2855,23): warning CS8618: Non-nullable property 'Errors' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the property as nullable. [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
+at <ScriptBlock>, D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\Installer\build-installer.ps1: line 68
+at <ScriptBlock>, D:\a\_temp\d1af66fb-dfea-4dea-84ca-4116b0e7fab5.ps1: line 12
+at <ScriptBlock>, <No file>: line 1
+```
