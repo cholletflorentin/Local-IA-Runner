@@ -164,8 +164,6 @@ public sealed class ChatPanel : DoubleBufferedPanel
         RunOnUi(() =>
         {
             var parsed = ParseThinking(content ?? "");
-            if (!isUser && string.IsNullOrWhiteSpace(parsed.Thinking) && _streamEntry != null && _streamEntry.Thinking.Length > 0)
-                parsed.Thinking = _streamEntry.Thinking;
 
             _entries.Add(new ChatEntry
             {
@@ -322,8 +320,7 @@ public sealed class ChatPanel : DoubleBufferedPanel
             if (!string.IsNullOrWhiteSpace(fullContent))
             {
                 var parsed = ParseThinking(fullContent);
-                if (!string.IsNullOrWhiteSpace(parsed.Thinking))
-                    _streamEntry.Thinking = parsed.Thinking;
+                _streamEntry.Thinking = parsed.Thinking;
                 _streamEntry.Content = parsed.Response;
             }
 

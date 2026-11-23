@@ -1338,9 +1338,11 @@ class LlamaCppBackend:
 
         summary = (
             f"Image créée avec le profil {recipe.get('name') or recipe['id']} : {paths[0]}\n"
-            f"Paramètres : {width}×{height}, {steps} étapes, CFG {cfg_scale:g}, "
-            f"guidage distillé {distilled_guidance:g}, graine {seed}."
+            f"Paramètres : {request.get('width', width)}×{request.get('height', height)}, {steps} étapes, CFG {cfg_scale:g}, "
+            f"guidage distillé {distilled_guidance:g}, graine {request.get('seed', seed)}."
         )
+        if request.get("_resolution_fallback_attempted"):
+            summary += " La résolution a été réduite automatiquement pour terminer la génération."
         return {"text": summary, "image_paths": paths}
 
     def generate_image(self, request):
@@ -1369,7 +1371,10 @@ class LlamaCppBackend:
             })
             if not request.get("keep_text_model_loaded"):
                 self.unload_model()
-            port = self._start_sd_server(model_dir)
+            port = self._start_sd_server(
+                model_dir,
+                force_cpu=bool(request.get("_force_cpu"))
+            )
             if self._cancel_requested.is_set():
                 self.send({"type": "image_complete", "cancelled": True})
                 return []
@@ -1384,6 +1389,11 @@ class LlamaCppBackend:
             cfg_scale = max(0.0, min(50.0, float(request.get("cfg_scale", 7.0))))
             distilled_guidance = max(0.0, min(50.0, float(request.get("distilled_guidance", 3.5))))
             seed = int(request.get("seed", -1))
+            if seed < 0:
+                # Resolve the random sentinel once so backend and resolution
+                # retries all use the same reproducible image seed.
+                seed = int.from_bytes(os.urandom(4), byteorder="little") & 0x7FFFFFFF
+                request["seed"] = seed
             body = {
                 "prompt": prompt,
                 "negative_prompt": str(request.get("negative_prompt", "")),
@@ -1461,7 +1471,10 @@ class LlamaCppBackend:
                         paths.append(str(output_path.resolve()))
                     if not paths:
                         raise RuntimeError("La génération est terminée, mais aucune image n'a été renvoyée.")
-                    self.send({"type": "image_complete", "paths": paths, "content": paths[0]})
+                    completion_text = f"Image générée en {width}×{height} (graine {seed})."
+                    if request.get("_resolution_fallback_attempted"):
+                        completion_text += " Résolution réduite automatiquement pour terminer la génération."
+                    self.send({"type": "image_complete", "paths": paths, "content": completion_text})
                     return paths
 
                 if state in ("failed", "cancelled"):
@@ -1498,12 +1511,55 @@ class LlamaCppBackend:
                             self._load_image_model(cpu_port, recipe, models)
                             retry_request = dict(request)
                             retry_request["_cpu_fallback_attempted"] = True
+                            retry_request["_force_cpu"] = True
+                            original_request = request.get("_original_request")
+                            retry_request["_original_request"] = (
+                                original_request if isinstance(original_request, dict) else request
+                            )
                             request["_cpu_fallback_error_delegated"] = True
                             retry_request["_cpu_fallback_error_delegated"] = False
                             return self._run_image_generation(retry_request)
+                        if (self._sd_server_variant == "cpu"
+                                and not request.get("_resolution_fallback_attempted")
+                                and max(width, height) > 512):
+                            scale = min(1.0, 512.0 / max(width, height))
+                            retry_width = max(64, int(round(width * scale / 64.0)) * 64)
+                            retry_height = max(64, int(round(height * scale / 64.0)) * 64)
+                            if (retry_width < width or retry_height < height):
+                                self.send({
+                                    "type": "image_engine_status",
+                                    "content": (
+                                        f"Aucune image à {width}×{height}. Nouvel essai à "
+                                        f"{retry_width}×{retry_height} pour réduire la mémoire nécessaire…"
+                                    )
+                                })
+                                retry_request = dict(request)
+                                retry_request["width"] = retry_width
+                                retry_request["height"] = retry_height
+                                retry_request["_resolution_fallback_attempted"] = True
+                                retry_request["_force_cpu"] = True
+                                original_request = request.get("_original_request")
+                                if not isinstance(original_request, dict):
+                                    original_request = request
+                                original_request["width"] = retry_width
+                                original_request["height"] = retry_height
+                                original_request["_resolution_fallback_attempted"] = True
+                                retry_request["_original_request"] = original_request
+                                retry_request["_cpu_fallback_error_delegated"] = False
+                                request["width"] = retry_width
+                                request["height"] = retry_height
+                                request["_resolution_fallback_attempted"] = True
+                                request["_cpu_fallback_error_delegated"] = True
+                                return self._run_image_generation(retry_request)
                         if request.get("_cpu_fallback_attempted"):
                             raise RuntimeError(
-                                "La génération a échoué en mode Vulkan puis en mode CPU : " + str(message)
+                                "La génération a échoué en mode Vulkan puis en mode CPU "
+                                f"à {width}×{height} (graine {request.get('seed', -1)}) : {message}"
+                            )
+                        if request.get("_resolution_fallback_attempted"):
+                            raise RuntimeError(
+                                f"La génération a aussi échoué après réduction à {width}×{height} "
+                                f"(graine {request.get('seed', -1)}) : {message}"
                             )
                         raise RuntimeError(message)
                     self.send({"type": "image_complete", "cancelled": True})
@@ -1519,6 +1575,74 @@ class LlamaCppBackend:
             if self._cancel_requested.is_set():
                 self.send({"type": "image_complete", "cancelled": True})
                 return []
+
+            # If sd-server disappears while a job is running, there is no failed
+            # status to trigger the ordinary fallback above. Recover that case
+            # too, since older Intel drivers can terminate the Vulkan process
+            # during inference after loading the model successfully.
+            transport_failure = isinstance(
+                error,
+                (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException)
+            )
+            if job_id and transport_failure:
+                current_variant = self._sd_server_variant
+                original_request = request.get("_original_request")
+                if not isinstance(original_request, dict):
+                    original_request = request
+
+                if (current_variant == "vulkan"
+                        and not request.get("_cpu_fallback_attempted")):
+                    self.send({
+                        "type": "image_engine_status",
+                        "content": (
+                            "Le serveur Vulkan s’est interrompu pendant la génération. "
+                            "Redémarrage sur le processeur…"
+                        )
+                    })
+                    retry_request = dict(request)
+                    retry_request["_cpu_fallback_attempted"] = True
+                    retry_request["_force_cpu"] = True
+                    retry_request["_original_request"] = original_request
+                    retry_request["_cpu_fallback_error_delegated"] = False
+                    request["_cpu_fallback_error_delegated"] = True
+                    with self._sd_job_lock:
+                        if self._sd_active_job_id == job_id:
+                            self._sd_active_job_id = None
+                    self._stop_sd_server()
+                    return self._run_image_generation(retry_request)
+
+                width = int(request.get("width", 1024))
+                height = int(request.get("height", 1024))
+                if (current_variant == "cpu"
+                        and not request.get("_resolution_fallback_attempted")
+                        and max(width, height) > 512):
+                    scale = 512.0 / max(width, height)
+                    retry_width = max(64, int(round(width * scale / 64.0)) * 64)
+                    retry_height = max(64, int(round(height * scale / 64.0)) * 64)
+                    self.send({
+                        "type": "image_engine_status",
+                        "content": (
+                            "Le serveur CPU s’est interrompu pendant la génération. "
+                            f"Nouvel essai à {retry_width}×{retry_height}…"
+                        )
+                    })
+                    retry_request = dict(request)
+                    retry_request["width"] = retry_width
+                    retry_request["height"] = retry_height
+                    retry_request["_force_cpu"] = True
+                    retry_request["_resolution_fallback_attempted"] = True
+                    retry_request["_original_request"] = original_request
+                    retry_request["_cpu_fallback_error_delegated"] = False
+                    original_request["width"] = retry_width
+                    original_request["height"] = retry_height
+                    original_request["_resolution_fallback_attempted"] = True
+                    request["_cpu_fallback_error_delegated"] = True
+                    with self._sd_job_lock:
+                        if self._sd_active_job_id == job_id:
+                            self._sd_active_job_id = None
+                    self._stop_sd_server()
+                    return self._run_image_generation(retry_request)
+
             error_message = str(error)
             if request.get("_cpu_fallback_attempted") and not error_message.startswith(
                     "La génération a échoué en mode Vulkan puis en mode CPU"):
@@ -1534,22 +1658,24 @@ class LlamaCppBackend:
 
     @staticmethod
     def _find_mmproj_for_model(model_file):
-        """Find a local multimodal projector paired with a GGUF model."""
+        """Find only a clearly named projector, or a generic one beside one model."""
+        model_file = Path(model_file)
         try:
-            candidates = sorted(
-                (path.resolve() for path in model_file.parent.iterdir()
-                 if path.is_file() and path.suffix.casefold() == ".gguf"
-                 and "mmproj" in path.stem.casefold()),
-                key=lambda path: path.name.casefold()
-            )
+            files = [
+                path.resolve() for path in model_file.parent.iterdir()
+                if path.is_file() and path.suffix.casefold() == ".gguf"
+            ]
         except OSError:
             return None, False
+
+        candidates = sorted(
+            (path for path in files if "mmproj" in path.stem.casefold()),
+            key=lambda path: path.name.casefold()
+        )
         if not candidates:
             return None, False
-        if len(candidates) == 1:
-            return str(candidates[0]), False
 
-        def tokens(stem):
+        def identity(stem):
             stem = re.sub(r"(?i)^mmproj[._ -]*", "", stem)
             stem = re.sub(
                 r"(?i)[._ -]+(?:q[2-8](?:_[a-z0-9]+)*|iq[1-4](?:_[a-z0-9]+)*|"
@@ -1557,25 +1683,33 @@ class LlamaCppBackend:
                 "",
                 stem
             )
-            ignored = {"model", "mmproj", "instruct", "chat", "gguf"}
-            return {
+            ignored = {
+                "model", "mmproj", "gguf", "instruct", "instruction",
+                "chat", "base", "it"
+            }
+            return tuple(
                 token for token in re.findall(r"[a-z]+\d*|\d+[a-z]*", stem.casefold())
                 if token not in ignored
-            }
+            )
 
-        model_tokens = tokens(model_file.stem)
-        ranked = []
-        for path in candidates:
-            projector_tokens = tokens(path.stem)
-            overlap = model_tokens & projector_tokens
-            score = len(overlap) / max(1, len(model_tokens))
-            ranked.append((score, len(overlap), path))
-        ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        best = ranked[0]
-        if (best[1] >= 2 and best[0] >= 0.5
-                and (len(ranked) == 1 or best[:2] != ranked[1][:2])):
-            return str(best[2]), False
-        return None, True
+        model_identity = identity(model_file.stem)
+        named_matches = [path for path in candidates
+                         if model_identity and identity(path.stem) == model_identity]
+        if len(named_matches) == 1:
+            return str(named_matches[0]), False
+        if len(named_matches) > 1:
+            return None, True
+
+        # Some repositories call every projector "mmproj-model-f16.gguf". Such
+        # a generic file is safe to infer only when it is the sole projector and
+        # the directory contains exactly one primary GGUF model.
+        generic_candidates = [path for path in candidates if not identity(path.stem)]
+        primary_models = [path for path in files if "mmproj" not in path.stem.casefold()]
+        if (len(candidates) == 1 and len(generic_candidates) == 1
+                and len(primary_models) == 1 and primary_models[0] == model_file.resolve()):
+            return str(generic_candidates[0]), False
+
+        return None, len(candidates) > 1
 
     def load_model(self, model_path, ngl=99, threads=None, context_size=4096, use_mmap=False):
         """Start or reuse a server with the requested model already loaded."""
@@ -3323,8 +3457,6 @@ class LlamaCppBackend:
                     self.send({"type": "stream_start"})
                     stream_started = True
                 self.send({"type": "stream_token", "content": content})
-            else:
-                self.send({"type": "thinking_token", "content": content})
 
         def collected_content():
             content = "".join(visible_parts)

@@ -827,7 +827,7 @@ namespace LocalAIApp
             {
                 _statusBar.SetStatus("Choisissez le modèle GGUF principal", StatusType.Warning);
                 _chatPanel.AddSystemMessage(
-                    "Un fichier mmproj est un projecteur multimodal auxiliaire et ne se charge pas seul. Choisissez le GGUF principal du même dossier; son projecteur sera associé automatiquement.",
+                    "Un fichier mmproj est un projecteur multimodal auxiliaire et ne se charge pas seul. Choisissez le GGUF principal correspondant : l’application n’associe un projecteur nommé que si son nom identifie clairement ce modèle.",
                     MessageType.Warning);
                 if (!string.IsNullOrEmpty(_selectedModelPath))
                     _sidebarPanel.SelectModel(_selectedModelPath);
@@ -1391,7 +1391,11 @@ namespace LocalAIApp
                             break;
                         case "image_complete":
                             _imageGenerationActive = false;
-                            _imageGeneratorForm?.SetCompleted(msg.Paths?.ToObject<List<string>>() ?? new List<string>(), msg.Error, msg.Cancelled);
+                            _imageGeneratorForm?.SetCompleted(
+                                msg.Paths?.ToObject<List<string>>() ?? new List<string>(),
+                                msg.Error,
+                                msg.Cancelled,
+                                msg.Content);
                             _statusBar.SetStatus(msg.Error != null ? "Erreur génération image" : msg.Cancelled ? "Génération image annulée" : "Image générée", msg.Error != null ? StatusType.Error : msg.Cancelled ? StatusType.Warning : StatusType.Success);
                             ApplyPendingUpdateWhenIdle();
                             break;

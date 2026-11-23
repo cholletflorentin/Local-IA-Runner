@@ -812,9 +812,9 @@ namespace LocalAIApp
             }
         }
 
-        public void SetCompleted(List<string>? paths, string? error, bool cancelled)
+        public void SetCompleted(List<string>? paths, string? error, bool cancelled, string? completionMessage = null)
         {
-            if (InvokeRequired) { BeginInvoke(new Action(() => SetCompleted(paths, error, cancelled))); return; }
+            if (InvokeRequired) { BeginInvoke(new Action(() => SetCompleted(paths, error, cancelled, completionMessage))); return; }
             _catalogLoading = false;
             SetGenerating(false);
             if (!string.IsNullOrWhiteSpace(error))
@@ -846,7 +846,9 @@ namespace LocalAIApp
             catch { }
             var pathCount = paths?.Count ?? 0;
             _outputLabel.Text = pathCount > 1 ? $"{pathCount} images sauvegardées · {firstPath}" : "Image sauvegardée · " + firstPath;
-            SetStatus("Image générée et enregistrée.");
+            SetStatus(string.IsNullOrWhiteSpace(completionMessage)
+                ? "Image générée et enregistrée."
+                : completionMessage);
         }
 
         private void OpenOutputDirectory()
