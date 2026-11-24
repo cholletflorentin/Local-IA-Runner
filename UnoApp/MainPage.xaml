@@ -20,6 +20,10 @@
                 <PasswordBox x:Name="ApiKeyBox" Grid.Column="1" PlaceholderText="Clé API (facultative)" />
                 <Button x:Name="ConnectButton" Grid.Column="2" Content="Enregistrer et connecter" Click="OnConnectClick" />
             </Grid>
+            <Grid x:Name="AndroidModelPanel" ColumnDefinitions="Auto,*" ColumnSpacing="8" Visibility="Collapsed">
+                <Button x:Name="ChooseModelButton" Content="Choisir un modèle GGUF" Click="OnChooseLocalModelClick" />
+                <TextBlock x:Name="LocalModelText" Grid.Column="1" Text="Aucun modèle GGUF choisi" VerticalAlignment="Center" Foreground="#AAB4C1" TextTrimming="CharacterEllipsis" />
+            </Grid>
             <ComboBox x:Name="MobileConversationPicker" PlaceholderText="Choisir une discussion" ItemsSource="{x:Bind Conversations}" SelectionChanged="OnMobileConversationSelectionChanged" Visibility="Collapsed">
                 <ComboBox.ItemTemplate>
                     <DataTemplate>

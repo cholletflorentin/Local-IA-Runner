@@ -52,5 +52,7 @@ public sealed class Conversation : INotifyPropertyChanged
 public sealed class AppState
 {
     public string Endpoint { get; set; } = "http://127.0.0.1:8080";
+    public string LocalModelPath { get; set; } = "";
+    public string LocalModelName { get; set; } = "";
     public List<Conversation> Conversations { get; set; } = [];
 }

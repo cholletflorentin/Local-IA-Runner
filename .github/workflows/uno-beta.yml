@@ -219,7 +219,7 @@ jobs:
           - Android : APK de test avec l'archive llama.cpp b12676 pour Android ARM64 intégrée.
 
           ### À savoir
-          L'application Uno reste un client de chat : le modèle GGUF et le serveur doivent être lancés séparément. Sur ordinateur, les archives incluent llama.cpp et `run-llama-server.cmd` ou `run-llama-server.sh`. L'APK inclut maintenant le paquet llama.cpp Android ARM64; l'application ne démarre pas encore ce moteur elle-même et doit se connecter à un serveur compatible déjà lancé. L'intégration du backend Python, de stable-diffusion.cpp, des outils, du forum, des sous-agents et des réglages avancés n'est pas encore portée dans l'application Uno. L'APK de test est signé avec une clé temporaire; il faut désinstaller l'ancienne bêta Android avant d'installer celle-ci.
+          Sur Windows, Linux et macOS, les archives incluent llama.cpp et `run-llama-server.cmd` ou `run-llama-server.sh`; il faut lancer le serveur avec un GGUF séparé. Sur Android, choisis un GGUF dans l'application : llama-server b12676 ARM64 s'extrait de l'APK et démarre automatiquement au premier message, puis reste actif tant que l'application est ouverte. Le GGUF n'est pas inclus dans l'APK et est copié dans l'espace privé de l'application. L'intégration du backend Python, de stable-diffusion.cpp, des outils, du forum, des sous-agents et des réglages avancés n'est pas encore portée dans l'application Uno. L'APK de test est signé avec une clé temporaire; il faut désinstaller l'ancienne bêta Android avant d'installer celle-ci.
           NOTES
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
