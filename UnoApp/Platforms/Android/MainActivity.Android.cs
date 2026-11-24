@@ -11,7 +11,7 @@ namespace LocalIARunner.Uno.Droid;
     WindowSoftInputMode = SoftInput.AdjustNothing | SoftInput.StateHidden,
     Theme = "@style/AppTheme",
     Exported = true)]
-public sealed class MainActivity : global::Uno.UI.Runtime.Android.ApplicationActivity
+public sealed class MainActivity : global::Microsoft.UI.Xaml.ApplicationActivity
 {
     protected override void OnCreate(Bundle? savedInstanceState)
     {

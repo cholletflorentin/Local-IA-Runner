@@ -6,16 +6,10 @@ using Uno.UI.Hosting;
 namespace LocalIARunner.Uno.Droid;
 
 [Application(Label = "Local IA Runner", Theme = "@style/AppTheme", LargeHeap = true, HardwareAccelerated = true)]
-public sealed class Application : global::Uno.UI.Runtime.Android.NativeApplication
+public sealed class Application : global::Microsoft.UI.Xaml.NativeApplication
 {
     public Application(IntPtr javaReference, JniHandleOwnership transfer)
-        : base(javaReference, transfer)
+        : base(() => new global::LocalIARunner.Uno.App(), javaReference, transfer)
     {
     }
-
-    protected override global::Uno.UI.Hosting.UnoPlatformHost CreateHost() =>
-        UnoPlatformHostBuilder.Create()
-            .App(() => new LocalIARunner.Uno.App())
-            .UseAndroid()
-            .Build();
 }
