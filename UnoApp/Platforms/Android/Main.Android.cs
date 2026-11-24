@@ -1,0 +1,21 @@
+using Android.App;
+using Android.OS;
+using Android.Runtime;
+using Uno.UI.Hosting;
+
+namespace LocalIARunner.Uno.Droid;
+
+[Application(Label = "Local IA Runner", Theme = "@style/AppTheme", LargeHeap = true, HardwareAccelerated = true)]
+public sealed class Application : Uno.UI.Runtime.Android.NativeApplication
+{
+    public Application(IntPtr javaReference, JniHandleOwnership transfer)
+        : base(javaReference, transfer)
+    {
+    }
+
+    protected override UnoPlatformHost CreateHost() =>
+        UnoPlatformHostBuilder.Create()
+            .App(() => new LocalIARunner.Uno.App())
+            .UseAndroid()
+            .Build();
+}

@@ -1,0 +1,157 @@
+name: Build and publish Uno beta
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'UnoApp/**'
+      - '.github/workflows/uno-beta.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: uno-beta-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  desktop:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            runner: windows-latest
+            rid: win-x64
+            archive: LocalIARunner-Uno-Windows-x64.zip
+          - label: Linux x64
+            runner: ubuntu-latest
+            rid: linux-x64
+            archive: LocalIARunner-Uno-Linux-x64.zip
+          - label: macOS x64
+            runner: macos-15-intel
+            rid: osx-x64
+            archive: LocalIARunner-Uno-macOS-x64.zip
+          - label: macOS ARM64
+            runner: macos-latest
+            rid: osx-arm64
+            archive: LocalIARunner-Uno-macOS-arm64.zip
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10 and Uno SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: UnoApp/global.json
+
+      - name: Publish desktop app
+        working-directory: UnoApp
+        run: dotnet publish LocalIARunner.Uno.csproj -c Release -f net10.0-desktop -r ${{ matrix.rid }} -p:TargetFrameworks=net10.0-desktop -p:SelfContained=true -p:UseMonoRuntime=false -o "${{ runner.temp }}/uno-publish"
+
+      - name: Package desktop app
+        shell: pwsh
+        run: Compress-Archive -Path "${{ runner.temp }}/uno-publish/*" -DestinationPath "${{ runner.temp }}/${{ matrix.archive }}" -Force
+
+      - name: Upload desktop package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ runner.temp }}/${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 3
+
+  android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up .NET 10 and Uno SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: UnoApp/global.json
+
+      - name: Install .NET Android workload
+        run: dotnet workload install android
+
+      - name: Sign and publish installable beta APK
+        shell: pwsh
+        working-directory: UnoApp
+        run: |
+          $keyPath = Join-Path '${{ runner.temp }}' 'uno-beta.keystore'
+          $password = [Guid]::NewGuid().ToString('N')
+          Write-Output "::add-mask::$password"
+          & keytool -genkeypair -noprompt -keystore $keyPath -alias uno-beta -storepass $password -keypass $password -dname 'CN=Local IA Runner Beta' -keyalg RSA -keysize 2048 -validity 10000
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create the temporary Android signing key.' }
+          $publishDir = Join-Path '${{ runner.temp }}' 'uno-android'
+          $publishArgs = @(
+            'publish', 'LocalIARunner.Uno.csproj', '-c', 'Release', '-f', 'net10.0-android',
+            '-p:TargetFrameworks=net10.0-android', '-p:AndroidPackageFormats=apk',
+            '-p:AndroidKeyStore=true', "-p:AndroidSigningKeyStore=$keyPath",
+            '-p:AndroidSigningKeyAlias=uno-beta', "-p:AndroidSigningKeyPass=$password",
+            "-p:AndroidSigningStorePass=$password", "-o", $publishDir
+          )
+          & dotnet @publishArgs
+          if ($LASTEXITCODE -ne 0) { throw 'Android APK publishing failed.' }
+          $apk = Get-ChildItem -Path @($publishDir, 'bin/Release/net10.0-android') -Filter '*Signed.apk' -Recurse | Select-Object -First 1
+          if (-not $apk) { throw 'The Android build did not produce an APK.' }
+          Copy-Item -LiteralPath $apk.FullName -Destination '${{ runner.temp }}/LocalIARunner-Uno-Android.apk' -Force
+
+      - name: Upload Android package
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalIARunner-Uno-Android.apk
+          path: ${{ runner.temp }}/LocalIARunner-Uno-Android.apk
+          if-no-files-found: error
+          retention-days: 3
+
+  release-beta:
+    name: Publish GitHub beta release
+    needs: [desktop, android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build packages
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="uno-v0.1.0-beta.${GITHUB_RUN_NUMBER}"
+          cat > release-notes.md <<'NOTES'
+          ## Local IA Runner — bêta Uno Platform
+
+          Première bêta de l'application multi-plateforme Uno, publiée séparément de la version WinForms stable.
+
+          ### Téléchargements
+          - Windows x64, Linux x64 et macOS ARM64 : archives portables de l'interface Uno.
+          - macOS x64 : archive portable compatible Intel.
+          - Android : APK de test.
+
+          ### À savoir
+          Cette bêta est un client de chat qui se connecte à un serveur llama.cpp compatible avec l'API OpenAI. Le moteur llama.cpp doit être lancé séparément. L'intégration du backend Python, de stable-diffusion.cpp, des outils, du forum, des sous-agents et des réglages avancés n'est pas encore portée dans l'application Uno. Le code et l'application WinForms existants restent conservés. L'APK de test est signé avec une clé temporaire; il faut désinstaller l'ancienne bêta Android avant d'installer celle-ci.
+          NOTES
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --title "Local IA Runner — bêta Uno Platform ${GITHUB_RUN_NUMBER}" --notes-file release-notes.md --prerelease
+          else
+            gh release create "$tag" release-assets/* --repo "$GITHUB_REPOSITORY" --title "Local IA Runner — bêta Uno Platform ${GITHUB_RUN_NUMBER}" --notes-file release-notes.md --prerelease --target "$GITHUB_SHA"
+          fi
