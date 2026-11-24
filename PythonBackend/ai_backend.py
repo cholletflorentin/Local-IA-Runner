@@ -325,6 +325,7 @@ class LlamaCppBackend:
         self.image_engine_memory_limit_gb = 4
         self.image_minimum_free_disk_gb = 5
         self._sd_server_lock = threading.RLock()
+        self._sd_operation_lock = threading.RLock()
         self._sd_job_lock = threading.Lock()
         self._sd_active_job_id = None
         self._sd_loaded_config = None
@@ -801,7 +802,10 @@ class LlamaCppBackend:
                 raw = response.read()
         except urllib.error.HTTPError as error:
             details = error.read().decode("utf-8", errors="replace").strip()
-            raise RuntimeError(f"stable-diffusion.cpp HTTP {error.code}: {details or error.reason}") from error
+            raise RuntimeError(
+                f"stable-diffusion.cpp HTTP {error.code} ({method} {path}): "
+                f"{details or error.reason}"
+            ) from error
         text = raw.decode("utf-8", errors="replace").strip()
         return json.loads(text) if text else {}
 
@@ -1282,6 +1286,10 @@ class LlamaCppBackend:
             raise RuntimeError("Impossible de démarrer stable-diffusion.cpp. " + " | ".join(startup_errors))
 
     def load_image_catalog(self, model_dir, memory_limit_gb=4, minimum_free_disk_gb=5):
+        with self._sd_operation_lock:
+            self._load_image_catalog_locked(model_dir, memory_limit_gb, minimum_free_disk_gb)
+
+    def _load_image_catalog_locked(self, model_dir, memory_limit_gb=4, minimum_free_disk_gb=5):
         try:
             self.image_engine_memory_limit_gb = max(1, min(64, int(memory_limit_gb)))
             self.image_minimum_free_disk_gb = max(1, min(100, int(minimum_free_disk_gb)))
@@ -1547,6 +1555,10 @@ class LlamaCppBackend:
         )
 
     def _generate_image_tool(self, arguments, default_image_model_path):
+        with self._sd_operation_lock:
+            return self._generate_image_tool_locked(arguments, default_image_model_path)
+
+    def _generate_image_tool_locked(self, arguments, default_image_model_path):
         default_path = Path(default_image_model_path).expanduser().resolve()
         source_root = self._image_model_root_for_file(default_path)
         catalog_root = self._prepare_sd_model_root(source_root)
@@ -1707,7 +1719,8 @@ class LlamaCppBackend:
 
     def generate_image(self, request):
         try:
-            self._run_image_generation_preserving_text_model(request)
+            with self._sd_operation_lock:
+                self._run_image_generation_preserving_text_model(request)
         except Exception:
             pass
         finally:
