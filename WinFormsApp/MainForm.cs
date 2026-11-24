@@ -36,6 +36,7 @@ namespace LocalAIApp
         private bool _isStreamingResponse = false;
         private bool _isCancellingGeneration = false;
         private bool _generationTimedOut = false;
+        private string _pendingBackendError = "";
         private bool _imageGenerationActive = false;
         private string _selectedModelName = "";
         private string _currentConversationId = Guid.NewGuid().ToString("N");
@@ -1022,7 +1023,7 @@ namespace LocalAIApp
                     {
                         if (e.Data != null)
                         {
-                            System.Diagnostics.Debug.WriteLine("[Python stderr] " + e.Data);
+                            Log("[Python stderr] " + e.Data);
                         }
                     };
                     process.Exited += (s, e) =>
@@ -1270,6 +1271,15 @@ namespace LocalAIApp
                         case "stream_end":
                             System.Diagnostics.Debug.WriteLine($"[C# stream_end] Before EndStreamingMessage, isGenerating={_isGenerating}");
                             var generationTimedOut = _generationTimedOut;
+                            var streamError = msg.Error;
+                            if (!string.IsNullOrWhiteSpace(_pendingBackendError) &&
+                                (string.IsNullOrWhiteSpace(streamError) ||
+                                 streamError.Contains("Impossible de charger le modele", StringComparison.OrdinalIgnoreCase) ||
+                                 streamError.Contains("Impossible de charger le modèle", StringComparison.OrdinalIgnoreCase)))
+                            {
+                                streamError = _pendingBackendError;
+                            }
+                            _pendingBackendError = "";
                             _generationWatchdog?.Dispose();
                             _streamRenderTimer.Stop();
                             try
@@ -1308,10 +1318,12 @@ namespace LocalAIApp
                                     _chatPanel.RenderMessages(_currentConversation);
                                     SaveConversation();
                                 }
-                                if (!string.IsNullOrWhiteSpace(msg.Error))
+                                if (!string.IsNullOrWhiteSpace(streamError))
                                 {
-                                    _statusBar.SetStatus("Erreur: " + msg.Error, StatusType.Error);
-                                    _chatPanel.AddSystemMessage(msg.Error, MessageType.Error);
+                                    var displayedError = AddApplicationLogLocation(streamError);
+                                    Log("[GENERATION ERROR] " + streamError);
+                                    _statusBar.SetStatus("Erreur: " + streamError, StatusType.Error);
+                                    _chatPanel.AddSystemMessage(displayedError, MessageType.Error);
                                 }
                                 else if (generationTimedOut)
                                 {
@@ -1346,6 +1358,18 @@ namespace LocalAIApp
                             ApplyGeneratedConversationTitle(msg);
                             break;
                         case "error":
+                            var backendError = string.IsNullOrWhiteSpace(msg.Content)
+                                ? "Erreur inconnue du backend."
+                                : msg.Content;
+                            Log("[BACKEND ERROR] " + backendError);
+                            var isPendingGenerationError = _isGenerating && !_isStreamingResponse;
+                            if (isPendingGenerationError)
+                                _pendingBackendError = backendError;
+                            else
+                            {
+                                _pendingBackendError = "";
+                                _chatPanel.AddSystemMessage(AddApplicationLogLocation(backendError), MessageType.Error);
+                            }
                             if (!_isStreamingResponse)
                             {
                                 _generationWatchdog?.Dispose();
@@ -1355,7 +1379,7 @@ namespace LocalAIApp
                                 _generationTimedOut = false;
                                 _inputPanel.SetGenerating(false);
                             }
-                            _statusBar.SetStatus("Erreur: " + msg.Content, StatusType.Error);
+                            _statusBar.SetStatus("Erreur: " + backendError, StatusType.Error);
                             ApplyPendingUpdateWhenIdle();
                             break;
                         case "model_loading":
@@ -1363,6 +1387,7 @@ namespace LocalAIApp
                             _statusBar.SetStatus("Chargement: " + msg.Content, StatusType.Info);
                             break;
                         case "model_loaded":
+                            _pendingBackendError = "";
                             _inputPanel.SetMultimodalSupport(msg.SupportsMultimodal);
                             _statusBar.SetStatus("Modele charge: " + msg.Content, StatusType.Success);
                             break;
@@ -1686,6 +1711,7 @@ namespace LocalAIApp
             _isGenerating = true;
             _isCancellingGeneration = false;
             _generationTimedOut = false;
+            _pendingBackendError = "";
             _receivedFirstToken = false;
             System.Threading.Interlocked.Exchange(ref _generationOutputTokenCount, 0);
             System.Threading.Interlocked.Exchange(ref _generationFirstTokenTimestamp, 0);
@@ -2779,6 +2805,11 @@ namespace LocalAIApp
                 System.Diagnostics.Debug.WriteLine(line); // Also to DebugView
             }
             catch { }
+        }
+
+        private string AddApplicationLogLocation(string error)
+        {
+            return $"{error}{Environment.NewLine}{Environment.NewLine}Journal de diagnostic : {_logFile}";
         }
 
         private void LogException(string context, Exception ex)

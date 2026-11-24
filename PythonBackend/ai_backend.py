@@ -2250,8 +2250,7 @@ class LlamaCppBackend:
                         self._stop_server(expected_process=process)
                         return False
                     if process.poll() is not None:
-                        details = self._server_log_tail(log_path)
-                        raise RuntimeError(f"llama-server s'est arrêté (code {process.returncode}). {details}")
+                        raise RuntimeError(f"llama-server s'est arrêté (code {process.returncode}).")
                     if self._is_server_healthy(port):
                         with self._server_state_lock:
                             if self._server_process is not process:
@@ -2274,7 +2273,12 @@ class LlamaCppBackend:
             except Exception as e:
                 self._stop_server(expected_process=process if "process" in locals() else None)
                 if not self._cancel_requested.is_set():
-                    self.send({"type": "error", "content": f"Impossible de charger le modèle: {e}"})
+                    error_message = f"Impossible de charger le modèle: {e}"
+                    server_details = self._server_log_tail(log_path)
+                    if server_details:
+                        error_message += f"\n\nDernières lignes du journal llama.cpp :\n{server_details}"
+                    error_message += f"\n\nJournal llama.cpp : {log_path}"
+                    self.send({"type": "error", "content": error_message})
                 return False
 
     def generate(self, prompt, history, model_path, stream=True, temperature=0.7, top_p=0.9,
