@@ -5090,7 +5090,7 @@ namespace LocalAIApp
 
             _useDedicatedConversationTitleModelCheckBox = new CheckBox
             {
-                Text = "Utiliser un modèle dédié pour nommer les conversations",
+                Text = "Activer le modèle dédié",
                 AutoSize = true,
                 ForeColor = ThemeColors.TextPrimary,
                 BackColor = ThemeColors.Surface,
@@ -5100,7 +5100,8 @@ namespace LocalAIApp
                 "Modèle de nommage des conversations",
                 "Désactivé par défaut : le modèle du chat crée le titre. Activé : le modèle choisi ci-dessous crée le titre avant la réponse, puis le modèle du chat est rechargé pour répondre.",
                 _useDedicatedConversationTitleModelCheckBox,
-                height: 96));
+                editorBelowTitle: true,
+                height: 108));
 
             _conversationTitleModelPathTextBox = CreateModelPathTextBox();
             _conversationTitleModelPicker = CreateModelPathPicker(
@@ -5133,7 +5134,7 @@ namespace LocalAIApp
 
             _keepChatModelLoadedForOmniCheckBox = new CheckBox
             {
-                Text = "Garder le modèle du chat chargé en même temps",
+                Text = "Garder les deux modèles chargés en même temps",
                 AutoSize = true,
                 ForeColor = ThemeColors.TextPrimary,
                 BackColor = ThemeColors.Surface,
@@ -5143,7 +5144,8 @@ namespace LocalAIApp
                 "Mémoire pendant l'analyse Omni",
                 "Désactivé : le modèle du chat est déchargé puis rechargé après l'analyse. Activé : le modèle Omni est chargé sur un second serveur, ce qui garde les deux modèles en mémoire et demande davantage de RAM/VRAM.",
                 _keepChatModelLoadedForOmniCheckBox,
-                height: 88));
+                editorBelowTitle: true,
+                height: 104));
 
             AddSection(content, "RECHERCHE DES MODÈLES");
             _searchAllModelDrivesCheckBox = new CheckBox
@@ -5563,10 +5565,26 @@ namespace LocalAIApp
                                           bool editorBelowTitle = false, int height = 76)
         {
             const int cardWidth = 580;
+            var titleFont = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+            var descriptionFont = new Font("Segoe UI", 9.5f);
+            var editorBelow = editorBelowTitle ||
+                (editor is CheckBox checkBox &&
+                 TextRenderer.MeasureText(checkBox.Text, checkBox.Font).Width > 170);
+            var descriptionHeight = Math.Max(22, TextRenderer.MeasureText(
+                description ?? "",
+                descriptionFont,
+                new Size(cardWidth - 24, 1000),
+                TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height + 2);
+            var editorTop = editorBelow ? Math.Max(65, 30 + descriptionHeight + 4) : 4;
+            var editorHeight = editorBelow ? Math.Max(30, height - 74) : editor.Height;
+            var requiredHeight = editorBelow
+                ? editorTop + editorHeight + 8
+                : 30 + descriptionHeight + 8;
+            var cardHeight = Math.Max(height, requiredHeight);
             var card = new Panel
             {
                 Width = cardWidth,
-                Height = height,
+                Height = cardHeight,
                 BackColor = ThemeColors.Surface,
                 Margin = new Padding(0, 0, 0, 8)
             };
@@ -5574,30 +5592,32 @@ namespace LocalAIApp
             {
                 Text = title,
                 Location = new Point(12, 6),
-                Width = editorBelowTitle ? cardWidth - 24 : cardWidth - 190,
+                Width = editorBelow ? cardWidth - 24 : cardWidth - 190,
                 Height = 22,
                 ForeColor = ThemeColors.TextPrimary,
-                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-                TextAlign = ContentAlignment.MiddleLeft
+                Font = titleFont,
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoSize = false
             };
             var descriptionLabel = new Label
             {
                 Text = description,
                 Location = new Point(12, 30),
                 Width = cardWidth - 24,
-                Height = editorBelowTitle ? 32 : 38,
+                Height = descriptionHeight,
                 ForeColor = ThemeColors.TextSecondary,
-                Font = new Font("Segoe UI", 9.5f),
-                TextAlign = ContentAlignment.TopLeft
+                Font = descriptionFont,
+                TextAlign = ContentAlignment.TopLeft,
+                AutoSize = false
             };
             card.Controls.Add(titleLabel);
             card.Controls.Add(descriptionLabel);
 
-            if (editorBelowTitle)
+            if (editorBelow)
             {
-                editor.Location = new Point(12, 65);
+                editor.Location = new Point(12, editorTop);
                 editor.Width = cardWidth - 24;
-                editor.Height = Math.Max(30, height - 74);
+                editor.Height = editorHeight;
             }
             else
             {
