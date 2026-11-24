@@ -1427,9 +1427,11 @@ namespace LocalAIApp
                             break;
                         case "image_error":
                             _imageGenerationActive = false;
-                            _subagentActivityForm?.AppendImageActivity("error", msg.Content ?? "Erreur inconnue");
-                            _imageGeneratorForm?.SetCompleted(new List<string>(), msg.Content ?? "Erreur inconnue", false);
+                            var imageError = msg.Content ?? "Erreur inconnue";
+                            _subagentActivityForm?.AppendImageActivity("error", imageError);
+                            _imageGeneratorForm?.SetCompleted(new List<string>(), imageError, false);
                             _statusBar.SetStatus("Erreur génération image", StatusType.Error);
+                            ShowImageMemoryError(imageError);
                             ApplyPendingUpdateWhenIdle();
                             break;
                         case "debug":
@@ -2249,6 +2251,61 @@ namespace LocalAIApp
                 }
             }
             return result;
+        }
+
+        private void ShowImageMemoryError(string error)
+        {
+            if (string.IsNullOrWhiteSpace(error) || !IsImageMemoryError(error))
+                return;
+
+            const int maximumDetailLength = 5000;
+            var detail = error.Trim();
+            if (detail.Length > maximumDetailLength)
+                detail = detail[..maximumDetailLength] + "…";
+
+            var message =
+                "Le moteur de génération n’a pas pu réserver assez de mémoire. Aucune image complète n’a été enregistrée pour cette tentative.\n\n" +
+                "Détail technique :\n" + detail + "\n\n" +
+                "Essaie de réduire la largeur et la hauteur, de diminuer le nombre d’étapes, ou d’activer « Mode CPU sécurisé pour les images » dans les paramètres. " +
+                "Fermer d’autres applications peut aussi libérer de la mémoire.";
+            MessageBox.Show(
+                this,
+                message,
+                "Mémoire insuffisante pour l’image",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+
+        private static bool IsImageMemoryError(string error)
+        {
+            var normalized = error.ToLowerInvariant();
+            string[] markers =
+            {
+                "out of memory",
+                "not enough memory",
+                "insufficient memory",
+                "memory allocation failed",
+                "failed to allocate",
+                "cannot allocate memory",
+                "could not allocate memory",
+                "bad_alloc",
+                "vk_error_out_of_device_memory",
+                "vk_error_out_of_host_memory",
+                "cuda out of memory",
+                "winerror 1455",
+                "error 1455",
+                "paging file is too small",
+                "mémoire insuffisante",
+                "manque de mémoire",
+                "pas assez de mémoire",
+                "allocation mémoire impossible"
+            };
+            foreach (var marker in markers)
+            {
+                if (normalized.Contains(marker, StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
         }
 
         private void SaveConversation()
