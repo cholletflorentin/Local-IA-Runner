@@ -328,7 +328,6 @@ class LlamaCppBackend:
         self._sd_operation_lock = threading.RLock()
         self._sd_job_lock = threading.Lock()
         self._sd_active_job_id = None
-        self._sd_loaded_config = None
         
         # Binary name based on platform
         self.binary_name = "llama-server.exe" if self.is_windows else "llama-server"
@@ -1100,8 +1099,7 @@ class LlamaCppBackend:
             self._sd_server_variant = None
             self._sd_server_memory_mode = None
             self._sd_server_memory_limit_gb = None
-            self._sd_loaded_config = None
-            job_handle = self._sd_server_job_handle
+                job_handle = self._sd_server_job_handle
             self._sd_server_job_handle = None
             log_handle = self._sd_server_log_handle
             self._sd_server_log_handle = None
@@ -1308,66 +1306,6 @@ class LlamaCppBackend:
             })
         except Exception as error:
             self.send({"type": "image_error", "content": str(error)})
-
-    def _load_image_model(self, port, recipe, models, request=None):
-        config_key = (self._sd_server_model_dir, recipe, json.dumps(models, sort_keys=True, ensure_ascii=False))
-        if self._sd_loaded_config == config_key:
-            return
-
-        self.send({"type": "image_loading", "content": "Chargement des composants du modèle d'images…"})
-        result = {}
-        failure = {}
-        finished = threading.Event()
-
-        def load_request():
-            try:
-                result["status"] = self._sd_api_request(
-                    port,
-                    "POST",
-                    "/sdcpp/v1/models/load",
-                    {"recipe": recipe, "models": models},
-                    timeout=7200
-                )
-            except Exception as error:
-                failure["error"] = error
-            finally:
-                finished.set()
-
-        loader = threading.Thread(target=load_request, daemon=True)
-        loader.start()
-        last_state = None
-        while not finished.wait(1.0):
-            if request is not None:
-                try:
-                    self._check_image_storage_budget(request)
-                except ImageSafetyLimitError:
-                    self._stop_sd_server()
-                    loader.join(timeout=10)
-                    raise
-            if self._cancel_requested.is_set():
-                self._stop_sd_server()
-                break
-            try:
-                status = self._sd_api_request(port, "GET", "/sdcpp/v1/models/status", timeout=5)
-                state = status.get("state")
-                elapsed = status.get("load_elapsed_seconds")
-                if state != last_state or state == "loading":
-                    elapsed_text = f" ({elapsed:.0f} s)" if isinstance(elapsed, (int, float)) else ""
-                    self.send({
-                        "type": "image_loading",
-                        "content": f"Chargement du modèle d'images : {state or 'en cours'}{elapsed_text}"
-                    })
-                    last_state = state
-            except Exception:
-                pass
-
-        loader.join()
-        if "error" in failure:
-            raise failure["error"]
-        status = result.get("status", {})
-        if status.get("state") != "ready":
-            raise RuntimeError(status.get("error") or "Le modèle d'images n'a pas pu être chargé.")
-        self._sd_loaded_config = config_key
 
     def _cancel_sd_job(self, port, job_id):
         try:
@@ -1791,11 +1729,6 @@ class LlamaCppBackend:
             if self._cancel_requested.is_set():
                 self.send({"type": "image_complete", "cancelled": True})
                 return []
-            self._load_image_model(port, recipe, models, request)
-            if self._cancel_requested.is_set():
-                self.send({"type": "image_complete", "cancelled": True})
-                return []
-
             width = max(64, min(4096, int(request.get("width", 1024))))
             height = max(64, min(4096, int(request.get("height", 1024))))
             steps = max(1, min(200, int(request.get("steps", 20))))
@@ -1807,7 +1740,12 @@ class LlamaCppBackend:
                 # retries all use the same reproducible image seed.
                 seed = int.from_bytes(os.urandom(4), byteorder="little") & 0x7FFFFFFF
                 request["seed"] = seed
+            self.send({
+                "type": "image_loading",
+                "content": "Chargement du modèle et préparation de l’image…"
+            })
             body = {
+                "model": {"recipe": recipe, "models": models},
                 "prompt": prompt,
                 "negative_prompt": str(request.get("negative_prompt", "")),
                 "width": width,
@@ -1964,12 +1902,11 @@ class LlamaCppBackend:
                             if self._cancel_requested.is_set():
                                 self.send({"type": "image_complete", "cancelled": True})
                                 return []
-                            cpu_port = self._start_sd_server(
+                            self._start_sd_server(
                                 model_dir, force_cpu=True,
                                 use_disk_for_memory=bool(request.get("use_disk_for_memory")),
                                 memory_limit_gb=request["image_engine_memory_limit_gb"]
                             )
-                            self._load_image_model(cpu_port, recipe, models, request)
                             retry_request = dict(request)
                             retry_request["_cpu_fallback_attempted"] = True
                             retry_request["_force_cpu"] = True
