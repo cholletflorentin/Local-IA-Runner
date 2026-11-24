@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
-using System.Text.Json.Serialization;
 
 namespace LocalIARunner.Uno;
 
@@ -20,7 +19,6 @@ public sealed class ChatMessage : INotifyPropertyChanged
         }
     }
 
-    [JsonIgnore]
     public event PropertyChangedEventHandler? PropertyChanged;
 
     private void OnPropertyChanged([CallerMemberName] string? name = null) =>
@@ -45,7 +43,6 @@ public sealed class Conversation : INotifyPropertyChanged
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     public List<ChatMessage> History { get; set; } = [];
 
-    [JsonIgnore]
     public event PropertyChangedEventHandler? PropertyChanged;
 
     private void OnPropertyChanged([CallerMemberName] string? name = null) =>
