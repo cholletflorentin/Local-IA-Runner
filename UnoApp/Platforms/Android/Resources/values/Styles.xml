@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <resources>
-  <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+  <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar">
     <item name="android:colorAccent">#7898FF</item>
     <item name="android:windowLightStatusBar">false</item>
   </style>
-  <style name="Theme.AppCompat.Translucent">
+  <style name="Theme.AppCompat.Translucent" parent="Theme.AppCompat">
     <item name="android:windowIsTranslucent">true</item>
     <item name="android:windowAnimationStyle">@android:style/Animation</item>
   </style>
