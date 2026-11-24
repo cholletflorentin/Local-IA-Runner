@@ -87,6 +87,7 @@ jobs:
           global-json-file: UnoApp/global.json
 
       - name: Install .NET Android workload
+        working-directory: UnoApp
         run: dotnet workload install android
 
       - name: Sign and publish installable beta APK
