@@ -4,4 +4,8 @@
     <item name="android:colorAccent">#7898FF</item>
     <item name="android:windowLightStatusBar">false</item>
   </style>
+  <style name="Theme.AppCompat.Translucent">
+    <item name="android:windowIsTranslucent">true</item>
+    <item name="android:windowAnimationStyle">@android:style/Animation</item>
+  </style>
 </resources>

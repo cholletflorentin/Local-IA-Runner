@@ -51,7 +51,7 @@
                             <Border Background="#202631" CornerRadius="8" Padding="12" Margin="0,0,0,10">
                                 <StackPanel Spacing="5">
                                     <TextBlock Text="{Binding Role}" FontWeight="SemiBold" Foreground="#AFC8FF" />
-                                    <TextBlock Text="{Binding Content}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                    <TextBlock Text="{Binding Content}" TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                         </DataTemplate>
