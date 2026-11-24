@@ -923,7 +923,8 @@ namespace LocalAIApp
             var json = JsonConvert.SerializeObject(new
             {
                 type = "check_model_capabilities",
-                model_path = modelPath
+                model_path = modelPath,
+                default_omni_model_path = _appSettings.UltraLiteMode ? "" : _appSettings.DefaultOmniModelPath
             });
             Task.Run(() =>
             {
@@ -1388,13 +1389,17 @@ namespace LocalAIApp
                             break;
                         case "model_loaded":
                             _pendingBackendError = "";
-                            _inputPanel.SetMultimodalSupport(msg.SupportsMultimodal);
-                            _statusBar.SetStatus("Modele charge: " + msg.Content, StatusType.Success);
+                            if (string.IsNullOrWhiteSpace(msg.ModelPath) ||
+                                string.Equals(Path.GetFullPath(msg.ModelPath), Path.GetFullPath(_selectedModelPath), StringComparison.OrdinalIgnoreCase))
+                            {
+                                _inputPanel.SetMultimodalSupport(msg.SupportsMultimodal, msg.CanAnalyzeImagesWithOmni);
+                                _statusBar.SetStatus("Modele charge: " + msg.Content, StatusType.Success);
+                            }
                             break;
                         case "model_capabilities":
                             if (!string.IsNullOrWhiteSpace(msg.ModelPath) &&
                                 string.Equals(Path.GetFullPath(msg.ModelPath), Path.GetFullPath(_selectedModelPath), StringComparison.OrdinalIgnoreCase))
-                                _inputPanel.SetMultimodalSupport(msg.SupportsMultimodal);
+                                _inputPanel.SetMultimodalSupport(msg.SupportsMultimodal, msg.CanAnalyzeImagesWithOmni);
                             break;
                         case "image_engine_status":
                             MarkGenerationProgress();
@@ -1820,6 +1825,8 @@ namespace LocalAIApp
                     available_subagent_models = _appSettings.UltraLiteMode ? Array.Empty<string>() : GetAvailableSubagentModelPaths(),
                     code_workspace = _appSettings.UltraLiteMode ? "" : _appSettings.CodeWorkspace,
                     default_image_model_path = _appSettings.UltraLiteMode ? "" : _appSettings.DefaultImageModelPath,
+                    default_omni_model_path = _appSettings.UltraLiteMode ? "" : _appSettings.DefaultOmniModelPath,
+                    keep_chat_model_loaded_for_omni = !_appSettings.UltraLiteMode && _appSettings.KeepChatModelLoadedForOmni,
                     use_disk_for_image_memory = !_appSettings.UltraLiteMode && _appSettings.UseDiskForImageMemory,
                     image_engine_memory_limit_gb = _appSettings.ImageEngineMemoryLimitGb,
                     image_minimum_free_disk_gb = _appSettings.ImageMinimumFreeDiskGb,
@@ -2033,6 +2040,8 @@ namespace LocalAIApp
                         UpdateTheme();
                     }
                     _statusBar.SetStatus("Parametres sauvegardes", StatusType.Success);
+                    if (!string.IsNullOrWhiteSpace(_selectedModelPath))
+                        RequestModelCapabilities(_selectedModelPath);
                     if (searchModeChanged)
                         ScanModelsFolder();
                 }
@@ -2997,6 +3006,8 @@ namespace LocalAIApp
         public string ConversationTitlePrompt { get; set; } = DefaultConversationTitlePrompt;
         public string DefaultTextModelPath { get; set; } = "";
         public string DefaultImageModelPath { get; set; } = "";
+        public string DefaultOmniModelPath { get; set; } = "";
+        public bool KeepChatModelLoadedForOmni { get; set; } = false;
         public bool UltraLiteMode { get; set; } = false;
         public bool EnableWebAccess { get; set; } = true;
         public bool EnableCodeExecution { get; set; } = false;
@@ -3111,6 +3122,8 @@ namespace LocalAIApp
         public JArray Media { get; set; }
         [JsonProperty("supports_multimodal")]
         public bool? SupportsMultimodal { get; set; }
+        [JsonProperty("can_analyze_images_with_omni")]
+        public bool? CanAnalyzeImagesWithOmni { get; set; }
         [JsonProperty("model_path")]
         public string ModelPath { get; set; } = "";
         public string Stage { get; set; }
@@ -3643,6 +3656,7 @@ namespace LocalAIApp
         private bool _isCancelling = false;
         private bool _isEditingMessage;
         private bool? _supportsMultimodal;
+        private bool _canAnalyzeImagesWithOmni;
 
         public InputPanel()
         {
@@ -3869,6 +3883,7 @@ namespace LocalAIApp
         {
             _modelSelected = selected;
             _supportsMultimodal = null;
+            _canAnalyzeImagesWithOmni = false;
             if (selected)
             {
                 _normalModelLabel = "[MODELE] " + modelName;
@@ -3891,9 +3906,11 @@ namespace LocalAIApp
             ClearAttachments();
         }
 
-        public void SetMultimodalSupport(bool? supported)
+        public void SetMultimodalSupport(bool? supported, bool? canAnalyzeImagesWithOmni = null)
         {
             _supportsMultimodal = supported;
+            if (canAnalyzeImagesWithOmni.HasValue)
+                _canAnalyzeImagesWithOmni = canAnalyzeImagesWithOmni.Value;
             UpdateAttachmentLabel();
             UpdateInteractionState();
         }
@@ -3945,10 +3962,13 @@ namespace LocalAIApp
 
         private void ChooseAttachments()
         {
+            var imageOnly = _supportsMultimodal == false && _canAnalyzeImagesWithOmni;
             using var dialog = new OpenFileDialog
             {
-                Title = "Joindre des images, fichiers audio ou vidéos",
-                Filter = "Médias pris en charge|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.mp3;*.wav;*.flac;*.mp4;*.webm;*.mov;*.mkv;*.avi;*.mpeg;*.mpg|Images|*.png;*.jpg;*.jpeg;*.gif;*.bmp|Audio|*.mp3;*.wav;*.flac|Vidéos|*.mp4;*.webm;*.mov;*.mkv;*.avi;*.mpeg;*.mpg|Tous les fichiers|*.*",
+                Title = imageOnly ? "Joindre une image pour l'analyse par le modèle Omni" : "Joindre des images, fichiers audio ou vidéos",
+                Filter = imageOnly
+                    ? "Images|*.png;*.jpg;*.jpeg;*.gif;*.bmp|Tous les fichiers|*.*"
+                    : "Médias pris en charge|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.mp3;*.wav;*.flac;*.mp4;*.webm;*.mov;*.mkv;*.avi;*.mpeg;*.mpg|Images|*.png;*.jpg;*.jpeg;*.gif;*.bmp|Audio|*.mp3;*.wav;*.flac|Vidéos|*.mp4;*.webm;*.mov;*.mkv;*.avi;*.mpeg;*.mpg|Tous les fichiers|*.*",
                 Multiselect = true,
                 CheckFileExists = true
             };
@@ -3995,9 +4015,11 @@ namespace LocalAIApp
             if (_attachments.Count == 0)
             {
                 _attachmentsLabel.Text = _supportsMultimodal == false
-                    ? "Ce modèle n’a pas de projecteur multimodal"
+                    ? _canAnalyzeImagesWithOmni
+                        ? "Les images seront analysées par le modèle Omni défini dans les paramètres"
+                        : "Ce modèle n’a pas de projecteur multimodal"
                     : "Aucune pièce jointe · images, audio et vidéo selon le modèle";
-                _attachmentsLabel.ForeColor = _supportsMultimodal == false
+                _attachmentsLabel.ForeColor = _supportsMultimodal == false && !_canAnalyzeImagesWithOmni
                     ? ThemeColors.Warning
                     : ThemeColors.TextMuted;
                 _attachmentsLabel.Cursor = Cursors.Default;
@@ -4069,7 +4091,8 @@ namespace LocalAIApp
         private void UpdateInteractionState()
         {
             _sendBtn.Enabled = _ready && _modelSelected && !_isCancelling;
-            _attachBtn.Enabled = _ready && _modelSelected && !_isGenerating && !_isCancelling && _supportsMultimodal != false;
+            _attachBtn.Enabled = _ready && _modelSelected && !_isGenerating && !_isCancelling &&
+                (_supportsMultimodal != false || _canAnalyzeImagesWithOmni);
             _inputBox.Enabled = _ready && !_isGenerating;
             _sendBtn.Text = _isCancelling ? "Arrêt…" : _isGenerating ? "Annuler" : _isEditingMessage ? "Renvoyer" : "Envoyer";
         }
@@ -4896,6 +4919,8 @@ namespace LocalAIApp
         private ModernTextBox _conversationTitlePromptTextBox = null!;
         private ModernTextBox _defaultTextModelPathTextBox = null!;
         private ModernTextBox _defaultImageModelPathTextBox = null!;
+        private ModernTextBox _defaultOmniModelPathTextBox = null!;
+        private CheckBox _keepChatModelLoadedForOmniCheckBox = null!;
         private CheckBox _webAccessCheckBox = null!;
         private CheckBox _codeExecutionCheckBox = null!;
         private CheckBox _systemCommandCheckBox = null!;
@@ -4939,6 +4964,8 @@ namespace LocalAIApp
                 ConversationTitlePrompt = currentSettings.ConversationTitlePrompt ?? AppSettings.DefaultConversationTitlePrompt,
                 DefaultTextModelPath = currentSettings.DefaultTextModelPath ?? "",
                 DefaultImageModelPath = currentSettings.DefaultImageModelPath ?? "",
+                DefaultOmniModelPath = currentSettings.DefaultOmniModelPath ?? "",
+                KeepChatModelLoadedForOmni = currentSettings.KeepChatModelLoadedForOmni,
                 UltraLiteMode = currentSettings.UltraLiteMode,
                 SearchAllDrivesForModels = currentSettings.SearchAllDrivesForModels,
                 EnableWebAccess = currentSettings.EnableWebAccess,
@@ -5059,6 +5086,28 @@ namespace LocalAIApp
                 CreateModelPathPicker(_defaultImageModelPathTextBox, BrowseDefaultImageModel),
                 editorBelowTitle: true,
                 height: 112));
+
+            _defaultOmniModelPathTextBox = CreateModelPathTextBox();
+            content.Controls.Add(CreateSettingCard(
+                "Modèle Omni pour analyser les images",
+                "Modèle GGUF vision avec un fichier mmproj compatible dans le même dossier. Les modèles de chat sans mmproj, y compris ceux orientés code, peuvent appeler analyze_image.",
+                CreateModelPathPicker(_defaultOmniModelPathTextBox, BrowseDefaultOmniModel),
+                editorBelowTitle: true,
+                height: 128));
+
+            _keepChatModelLoadedForOmniCheckBox = new CheckBox
+            {
+                Text = "Garder le modèle du chat chargé en même temps",
+                AutoSize = true,
+                ForeColor = ThemeColors.TextPrimary,
+                BackColor = ThemeColors.Surface,
+                FlatStyle = FlatStyle.Flat
+            };
+            content.Controls.Add(CreateSettingCard(
+                "Mémoire pendant l'analyse Omni",
+                "Désactivé : le modèle du chat est déchargé puis rechargé après l'analyse. Activé : le modèle Omni est chargé sur un second serveur, ce qui garde les deux modèles en mémoire et demande davantage de RAM/VRAM.",
+                _keepChatModelLoadedForOmniCheckBox,
+                height: 88));
 
             AddSection(content, "RECHERCHE DES MODÈLES");
             _searchAllModelDrivesCheckBox = new CheckBox
@@ -5597,6 +5646,19 @@ namespace LocalAIApp
                 _defaultImageModelPathTextBox.Text = dialog.FileName;
         }
 
+        private void BrowseDefaultOmniModel(object? sender, EventArgs e)
+        {
+            using var dialog = new OpenFileDialog
+            {
+                Title = "Choisir le modèle Omni vision par défaut",
+                Filter = "Modèles GGUF (*.gguf)|*.gguf|Tous les fichiers (*.*)|*.*",
+                CheckFileExists = true,
+                FileName = File.Exists(_defaultOmniModelPathTextBox.Text) ? _defaultOmniModelPathTextBox.Text : ""
+            };
+            if (dialog.ShowDialog(this) == DialogResult.OK)
+                _defaultOmniModelPathTextBox.Text = dialog.FileName;
+        }
+
         private static void SetNumericValue(ModernNumericUpDown control, decimal value)
         {
             control.Value = Math.Max(control.Minimum, Math.Min(control.Maximum, value));
@@ -5609,6 +5671,8 @@ namespace LocalAIApp
             _systemPromptTextBox.Text = Settings.SystemPrompt ?? "";
             _defaultTextModelPathTextBox.Text = Settings.DefaultTextModelPath ?? "";
             _defaultImageModelPathTextBox.Text = Settings.DefaultImageModelPath ?? "";
+            _defaultOmniModelPathTextBox.Text = Settings.DefaultOmniModelPath ?? "";
+            _keepChatModelLoadedForOmniCheckBox.Checked = Settings.KeepChatModelLoadedForOmni;
             _searchAllModelDrivesCheckBox.Checked = Settings.SearchAllDrivesForModels;
             _webAccessCheckBox.Checked = Settings.EnableWebAccess;
             _codeExecutionCheckBox.Checked = Settings.EnableCodeExecution;
@@ -5652,6 +5716,8 @@ namespace LocalAIApp
             Settings.SystemPrompt = _systemPromptTextBox.Text;
             Settings.DefaultTextModelPath = _defaultTextModelPathTextBox.Text.Trim();
             Settings.DefaultImageModelPath = _defaultImageModelPathTextBox.Text.Trim();
+            Settings.DefaultOmniModelPath = _defaultOmniModelPathTextBox.Text.Trim();
+            Settings.KeepChatModelLoadedForOmni = _keepChatModelLoadedForOmniCheckBox.Checked;
             Settings.SearchAllDrivesForModels = _searchAllModelDrivesCheckBox.Checked;
             Settings.EnableWebAccess = _webAccessCheckBox.Checked;
             Settings.EnableCodeExecution = _codeExecutionCheckBox.Checked;
