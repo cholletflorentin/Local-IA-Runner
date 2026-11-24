@@ -1099,7 +1099,7 @@ class LlamaCppBackend:
             self._sd_server_variant = None
             self._sd_server_memory_mode = None
             self._sd_server_memory_limit_gb = None
-                job_handle = self._sd_server_job_handle
+            job_handle = self._sd_server_job_handle
             self._sd_server_job_handle = None
             log_handle = self._sd_server_log_handle
             self._sd_server_log_handle = None
