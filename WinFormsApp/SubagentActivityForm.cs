@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 6524)
-Total output lines: 614
-
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -153,7 +150,314 @@ namespace LocalAIApp
                     pane.CurrentBlock = blockKey;
                     if (kind == "thinking")
                     {
-                        pane.ThinkingBlockSt…3524 tokens truncated…;
+                        pane.ThinkingBlockStart = start;
+                        pane.ThinkingBlockLength = pane.Log.TextLength - start;
+                    }
+                }
+
+                var priorLength = pane.Log.TextLength;
+                AppendText(pane.Log, content,
+                    kind == "thinking" ? _thinkingFont : _codeFont,
+                    kind == "thinking" ? ThemeColors.TextMuted : ThemeColors.TextPrimary);
+                if (kind == "thinking" && pane.ThinkingBlockStart >= 0)
+                    pane.ThinkingBlockLength += pane.Log.TextLength - priorLength;
+                ScrollToEnd(pane.Log);
+                SetAgentState(pane, kind == "thinking" ? "Réflexion" : "Génération");
+                return;
+            }
+
+            var (title, color, state) = kind switch
+            {
+                "start" => ("Démarrage", ThemeColors.Primary, "Démarrage"),
+                "status" => ("État", ThemeColors.TextMuted, "En cours"),
+                "tool_start" => ("Exécution d’un outil", ThemeColors.Warning, "Outil en cours"),
+                "tool_result" => ("Résultat de l’outil", ThemeColors.Success, "Outil terminé"),
+                "final" => ("Réponse du sous-agent", ThemeColors.Primary, "Réponse"),
+                "complete" => ("Terminé", ThemeColors.Success, "Terminé"),
+                "cancelled" => ("Annulé", ThemeColors.Warning, "Annulé"),
+                "error" => ("Erreur", ThemeColors.Error, "Erreur"),
+                _ => (kind, ThemeColors.TextMuted, kind)
+            };
+
+            var logFont = kind is "tool_start" or "tool_result" ? _codeFont : _bodyFont;
+            StartBlock(pane.Log,
+                title, pane.Model, color, _headerFont);
+            if (!string.IsNullOrWhiteSpace(content))
+                AppendText(pane.Log, content, logFont,
+                    kind == "error" ? ThemeColors.Error : ThemeColors.TextPrimary);
+            AppendText(pane.Log, "\n", _bodyFont, ThemeColors.TextPrimary);
+            pane.CurrentBlock = "";
+            ScrollToEnd(pane.Log);
+            SetAgentState(pane, state + (string.IsNullOrWhiteSpace(content) ? "" : " — " + FirstLine(content)));
+            if (kind is "start" or "tool_start")
+                _activityTabs.SelectedTab = pane.Page;
+        }
+
+        public void AppendImageActivity(string kind, string content = "", int? completed = null,
+            int? total = null, int? pass = null, long? downloaded = null, long? downloadTotal = null)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => AppendImageActivity(
+                    kind, content, completed, total, pass, downloaded, downloadTotal)));
+                return;
+            }
+
+            EnsureImagePage();
+            RemoveWaitingPageIfNeeded();
+            content ??= "";
+
+            switch (kind)
+            {
+                case "start":
+                    _imageGenerationNumber++;
+                    _imageState = "Préparation";
+                    _imageProgressBar!.Value = 0;
+                    _imageProgressBar.Maximum = 1000;
+                    _imageProgressBar!.Style = ProgressBarStyle.Marquee;
+                    _imageProgressBar.MarqueeAnimationSpeed = 24;
+                    _imageStatusLabel!.ForeColor = ThemeColors.TextSecondary;
+                    _imageStatusLabel.Text = content;
+                    AppendImageLog($"Nouvelle génération #{_imageGenerationNumber}", ThemeColors.Primary);
+                    AppendImageLog(content, ThemeColors.TextPrimary);
+                    _activityTabs.SelectedTab = _imagePage;
+                    break;
+                case "progress":
+                    _imageState = "Génération";
+                    var stage = string.IsNullOrWhiteSpace(content) ? "Génération en cours…" : content;
+                    if (pass.HasValue)
+                        stage += $" — passe {pass.Value}";
+                    if (completed.HasValue && total.HasValue && total.Value > 0)
+                        stage += $" — {completed.Value}/{total.Value}";
+                    SetImageProgress(completed, total);
+                    SetImageStatus(stage, ThemeColors.TextSecondary);
+                    AppendImageLog(stage, ThemeColors.TextPrimary);
+                    break;
+                case "engine_progress":
+                    var downloadText = downloadTotal.GetValueOrDefault() > 0
+                        ? $"Téléchargement du moteur : {FormatBytes(downloaded.GetValueOrDefault())} / {FormatBytes(downloadTotal.GetValueOrDefault())}"
+                        : "Téléchargement du moteur d’images…";
+                    SetImageStatus(downloadText, ThemeColors.TextSecondary);
+                    var totalBytes = downloadTotal.GetValueOrDefault();
+                    if (downloaded.HasValue && totalBytes > 0)
+                    {
+                        _imageProgressBar!.Style = ProgressBarStyle.Continuous;
+                        _imageProgressBar.Maximum = 1000;
+                        _imageProgressBar.Value = (int)Math.Clamp(
+                            downloaded.Value * 1000 / totalBytes, 0, 1000);
+                    }
+                    AppendImageLog(downloadText, ThemeColors.TextPrimary);
+                    break;
+                case "preview":
+                    SetImagePreview(content);
+                    SetImageStatus("Aperçu actualisé", ThemeColors.TextSecondary);
+                    break;
+                case "complete":
+                    _imageState = "Terminé";
+                    StopImageProgress();
+                    _imageProgressBar!.Value = _imageProgressBar.Maximum;
+                    SetImageStatus(string.IsNullOrWhiteSpace(content) ? "Image générée." : content,
+                        ThemeColors.Success);
+                    AppendImageLog(string.IsNullOrWhiteSpace(content) ? "Génération terminée." : content,
+                        ThemeColors.Success);
+                    break;
+                case "cancelled":
+                    _imageState = "Annulée";
+                    StopImageProgress();
+                    SetImageStatus(string.IsNullOrWhiteSpace(content) ? "Génération annulée." : content,
+                        ThemeColors.Warning);
+                    AppendImageLog(string.IsNullOrWhiteSpace(content) ? "Génération annulée." : content,
+                        ThemeColors.Warning);
+                    break;
+                case "error":
+                    _imageState = "Erreur";
+                    StopImageProgress();
+                    SetImageStatus(string.IsNullOrWhiteSpace(content) ? "Échec de la génération." : content,
+                        ThemeColors.Error);
+                    AppendImageLog(string.IsNullOrWhiteSpace(content) ? "Échec de la génération." : content,
+                        ThemeColors.Error);
+                    break;
+                default:
+                    _imageState = "En cours";
+                    SetImageStatus(content, ThemeColors.TextSecondary);
+                    if (!string.IsNullOrWhiteSpace(content))
+                        AppendImageLog(content, ThemeColors.TextPrimary);
+                    break;
+            }
+
+            UpdateImageTabTitle();
+            _summaryLabel.Text = "Génération d’image — " + _imageState;
+        }
+
+        private AgentActivityPane GetOrCreateAgentPane(string activityId, string model)
+        {
+            if (_agentPanes.TryGetValue(activityId, out var existing))
+                return existing;
+
+            var number = _agentPanes.Count + 1;
+            var page = new TabPage($"{number}. {TrimTabText(model)}")
+            {
+                BackColor = ThemeColors.Background,
+                ForeColor = ThemeColors.TextPrimary,
+                ToolTipText = model
+            };
+            var layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 2,
+                Padding = new Padding(8),
+                BackColor = ThemeColors.Background
+            };
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var status = new Label
+            {
+                Dock = DockStyle.Fill,
+                Text = "En cours",
+                ForeColor = ThemeColors.TextMuted,
+                Font = _headerFont,
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoEllipsis = true
+            };
+            var log = CreateLog();
+            layout.Controls.Add(status, 0, 0);
+            layout.Controls.Add(log, 0, 1);
+            page.Controls.Add(layout);
+            _activityTabs.TabPages.Add(page);
+            ThemeColors.ApplyToControlTree(page);
+
+            var pane = new AgentActivityPane
+            {
+                ActivityId = activityId,
+                Model = model,
+                Number = number,
+                Page = page,
+                StatusLabel = status,
+                Log = log
+            };
+            _agentPanes[activityId] = pane;
+            _summaryLabel.Text = $"{_agentPanes.Count} sous-agent(s) suivi(s) dans des onglets séparés.";
+            return pane;
+        }
+
+        private void SetAgentState(AgentActivityPane pane, string state)
+        {
+            pane.State = state;
+            pane.StatusLabel.Text = $"{pane.Model} — {state}";
+            pane.StatusLabel.ForeColor = state.StartsWith("Erreur", StringComparison.Ordinal)
+                ? ThemeColors.Error
+                : state.StartsWith("Terminé", StringComparison.Ordinal)
+                    ? ThemeColors.Success
+                    : ThemeColors.TextMuted;
+            pane.Page.Text = $"{pane.Number}. {TrimTabText(pane.Model)} — {ShortState(state)}";
+            _summaryLabel.Text = $"{_agentPanes.Count} sous-agent(s) suivi(s) dans des onglets séparés.";
+        }
+
+        private void ClearThinking(AgentActivityPane pane)
+        {
+            if (pane.ThinkingBlockStart >= 0 && pane.ThinkingBlockLength > 0 &&
+                pane.ThinkingBlockStart <= pane.Log.TextLength)
+            {
+                var length = Math.Min(pane.ThinkingBlockLength,
+                    pane.Log.TextLength - pane.ThinkingBlockStart);
+                pane.Log.Select(pane.ThinkingBlockStart, length);
+                pane.Log.SelectedText = "";
+            }
+            pane.ThinkingBlockStart = -1;
+            pane.ThinkingBlockLength = 0;
+            pane.CurrentBlock = "";
+            ScrollToEnd(pane.Log);
+        }
+
+        private void EnsureImagePage()
+        {
+            if (_imagePage != null && !_imagePage.IsDisposed)
+                return;
+
+            _imagePage = new TabPage("Images")
+            {
+                BackColor = ThemeColors.Background,
+                ForeColor = ThemeColors.TextPrimary
+            };
+            var layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 3,
+                Padding = new Padding(8),
+                BackColor = ThemeColors.Background
+            };
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            _imageStatusLabel = new Label
+            {
+                Dock = DockStyle.Fill,
+                Text = _imageState,
+                ForeColor = ThemeColors.TextMuted,
+                Font = _headerFont,
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoEllipsis = true
+            };
+            _imageProgressBar = new ProgressBar
+            {
+                Dock = DockStyle.Fill,
+                Minimum = 0,
+                Maximum = 1000,
+                Value = 0,
+                Style = ProgressBarStyle.Continuous
+            };
+            var body = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 1,
+                BackColor = ThemeColors.Background,
+                Padding = new Padding(0, 8, 0, 0)
+            };
+            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 62));
+            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 38));
+            _imageLog = CreateLog();
+            _imagePreview = new PictureBox
+            {
+                Dock = DockStyle.Fill,
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = ThemeColors.Surface,
+                SizeMode = PictureBoxSizeMode.Zoom
+            };
+            var previewPanel = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 2,
+                Padding = new Padding(8, 0, 0, 0),
+                BackColor = ThemeColors.Background
+            };
+            previewPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+            previewPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            previewPanel.Controls.Add(new Label
+            {
+                Text = "Aperçu en direct",
+                Dock = DockStyle.Fill,
+                ForeColor = ThemeColors.TextMuted,
+                TextAlign = ContentAlignment.MiddleLeft
+            }, 0, 0);
+            previewPanel.Controls.Add(_imagePreview, 0, 1);
+            body.Controls.Add(_imageLog, 0, 0);
+            body.Controls.Add(previewPanel, 1, 0);
+            layout.Controls.Add(_imageStatusLabel, 0, 0);
+            layout.Controls.Add(_imageProgressBar, 0, 1);
+            layout.Controls.Add(body, 0, 2);
+            _imagePage.Controls.Add(layout);
+            _activityTabs.TabPages.Add(_imagePage);
+            ThemeColors.ApplyToControlTree(_imagePage);
+        }
+
+        private void SetImageProgress(int? completed, int? total)
+        {
+            if (_imageProgressBar == null || _imageProgressBar.IsDisposed)
+                return;
             if (completed.HasValue && total.GetValueOrDefault() > 0)
             {
                 StopImageProgress();
