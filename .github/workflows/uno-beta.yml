@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: uno-beta-${{ github.ref }}
+  group: uno-beta-${{ github.ref }}-cross-target
   cancel-in-progress: false
 
 jobs:
@@ -43,7 +43,7 @@ jobs:
             llama_asset: llama-b12676-bin-macos-x64.tar.gz
             llama_sha256: 10f36c786606e874f7440a87b48716dbd19f4bc6670e7dcd005e43c61977e6ef
           - label: macOS ARM64
-            runner: macos-latest
+            runner: macos-15-intel
             rid: osx-arm64
             archive: LocalIARunner-Uno-macOS-arm64.zip
             llama_asset: llama-b12676-bin-macos-arm64.tar.gz
@@ -227,3 +227,4 @@ jobs:
           else
             gh release create "$tag" release-assets/* --repo "$GITHUB_REPOSITORY" --title "Local IA Runner — bêta Uno Platform ${GITHUB_RUN_NUMBER}" --notes-file release-notes.md --prerelease --target "$GITHUB_SHA"
           fi
+
