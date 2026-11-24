@@ -2064,6 +2064,22 @@ namespace LocalAIApp
                     return;
                 }
 
+                var updateChoice = ShowUpdateAvailableDialog(release);
+                if (updateChoice == DialogResult.Ignore)
+                {
+                    _appSettings.AutoUpdateEnabled = false;
+                    SaveAppSettings();
+                    _statusBar.SetStatus(
+                        "Les propositions automatiques de mises à jour sont désactivées. Tu peux les réactiver dans les paramètres.",
+                        StatusType.Info);
+                    return;
+                }
+                if (updateChoice != DialogResult.Yes)
+                {
+                    _statusBar.SetStatus($"Mise à jour {release.Version} reportée.", StatusType.Info);
+                    return;
+                }
+
                 var packageKind = GitHubUpdater.GetPackageKind();
                 var asset = release.GetAsset(packageKind);
                 _statusBar.SetStatus($"Téléchargement de la mise à jour {release.Version}...", StatusType.Info);
@@ -2099,6 +2115,153 @@ namespace LocalAIApp
             {
                 _updateCheckInProgress = false;
             }
+        }
+
+        private DialogResult ShowUpdateAvailableDialog(GitHubReleaseInfo release)
+        {
+            using var dialog = new Form
+            {
+                Text = "Mise à jour disponible",
+                ClientSize = new Size(760, 560),
+                MinimumSize = new Size(660, 440),
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.Sizable,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                ShowInTaskbar = false,
+                BackColor = ThemeColors.Background,
+                ForeColor = ThemeColors.TextPrimary,
+                Font = new Font("Segoe UI", 9.5f),
+                AutoScaleMode = AutoScaleMode.Font
+            };
+
+            var layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                Padding = new Padding(18),
+                ColumnCount = 1,
+                RowCount = 5,
+                BackColor = ThemeColors.Background,
+                ForeColor = ThemeColors.TextPrimary
+            };
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34f));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 64f));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28f));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 54f));
+
+            layout.Controls.Add(new Label
+            {
+                Text = $"Local IA Runner {release.Version}",
+                Dock = DockStyle.Fill,
+                Font = new Font("Segoe UI", 15f, FontStyle.Bold),
+                ForeColor = ThemeColors.TextPrimary,
+                BackColor = ThemeColors.Background,
+                TextAlign = ContentAlignment.MiddleLeft
+            }, 0, 0);
+            layout.Controls.Add(new Label
+            {
+                Text = "Une nouvelle version est disponible. Le téléchargement démarre seulement après ton accord. L'installation fermera puis redémarrera l'application; si une génération est en cours, elle attendra sa fin. « Ne plus me proposer » désactive les alertes automatiques au démarrage.",
+                Dock = DockStyle.Fill,
+                ForeColor = ThemeColors.TextSecondary,
+                BackColor = ThemeColors.Background,
+                TextAlign = ContentAlignment.MiddleLeft
+            }, 0, 1);
+
+            var notes = new RichTextBox
+            {
+                Dock = DockStyle.Fill,
+                ReadOnly = true,
+                DetectUrls = false,
+                WordWrap = true,
+                ScrollBars = RichTextBoxScrollBars.Vertical,
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = ThemeColors.Surface,
+                ForeColor = ThemeColors.TextPrimary,
+                Font = new Font("Segoe UI", 9.5f),
+                Text = string.IsNullOrWhiteSpace(release.Notes)
+                    ? "Aucune note de version n'est disponible."
+                    : release.Notes.Trim()
+            };
+            layout.Controls.Add(notes, 0, 2);
+
+            var releaseLink = new LinkLabel
+            {
+                Text = "Consulter la publication complète sur GitHub",
+                AutoSize = true,
+                Dock = DockStyle.Left,
+                LinkColor = ThemeColors.Primary,
+                ActiveLinkColor = ThemeColors.PrimaryHover,
+                VisitedLinkColor = ThemeColors.Primary,
+                BackColor = ThemeColors.Background,
+                Font = new Font("Segoe UI", 9f)
+            };
+            releaseLink.LinkClicked += (sender, args) =>
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo(release.ReleaseUrl) { UseShellExecute = true });
+                }
+                catch (Exception ex)
+                {
+                    LogException("Ouverture des notes de mise à jour GitHub", ex);
+                }
+            };
+            layout.Controls.Add(releaseLink, 0, 3);
+
+            var buttons = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 4,
+                RowCount = 1,
+                BackColor = ThemeColors.Background,
+                Padding = new Padding(0, 8, 0, 0)
+            };
+            buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 108f));
+            buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 246f));
+            buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200f));
+
+            var laterButton = new ModernButton
+            {
+                Text = "Plus tard",
+                DialogResult = DialogResult.No,
+                Width = 100,
+                Height = 38,
+                BackColorNormal = ThemeColors.BorderLight,
+                BackColorHover = ThemeColors.Border,
+                TextColor = ThemeColors.TextPrimary,
+                Anchor = AnchorStyles.Right | AnchorStyles.Top
+            };
+            var neverButton = new ModernButton
+            {
+                Text = "Ne plus me proposer les mises à jour",
+                DialogResult = DialogResult.Ignore,
+                Width = 240,
+                Height = 38,
+                BackColorNormal = ThemeColors.SurfaceHover,
+                BackColorHover = ThemeColors.BorderLight,
+                TextColor = ThemeColors.TextPrimary,
+                Anchor = AnchorStyles.Right | AnchorStyles.Top
+            };
+            var installButton = new ModernButton
+            {
+                Text = "Télécharger et installer",
+                DialogResult = DialogResult.Yes,
+                Width = 194,
+                Height = 38,
+                Anchor = AnchorStyles.Right | AnchorStyles.Top
+            };
+            buttons.Controls.Add(laterButton, 1, 0);
+            buttons.Controls.Add(neverButton, 2, 0);
+            buttons.Controls.Add(installButton, 3, 0);
+            layout.Controls.Add(buttons, 0, 4);
+
+            dialog.Controls.Add(layout);
+            dialog.AcceptButton = installButton;
+            dialog.CancelButton = laterButton;
+            return dialog.ShowDialog(this);
         }
 
         private void ApplyPendingUpdateWhenIdle()
@@ -4914,16 +5077,17 @@ namespace LocalAIApp
             AddSection(content, "MISES À JOUR");
             _autoUpdateCheckBox = new CheckBox
             {
-                Text = "Activées",
+                Text = "Au démarrage",
                 AutoSize = true,
                 ForeColor = ThemeColors.TextPrimary,
                 BackColor = ThemeColors.Surface,
                 FlatStyle = FlatStyle.Flat
             };
             content.Controls.Add(CreateSettingCard(
-                "Mise à jour automatique depuis GitHub",
-                "Télécharge la dernière release et vérifie son SHA-256. Si une génération est en cours, l'application attend sa fin, s'installe puis redémarre. Le fichier téléchargé est supprimé après l'installation.",
-                _autoUpdateCheckBox));
+                "Vérifier les mises à jour automatiquement",
+                "Vérifie au démarrage et affiche les notes avant tout téléchargement. « Ne plus me proposer » coupe les alertes; tu peux les réactiver ici. La recherche manuelle reste disponible dans Outils.",
+                _autoUpdateCheckBox,
+                height: 88));
 
             AddSection(content, "INSTRUCTIONS ET MÉMOIRE");
             _ultraLiteModeCheckBox = new CheckBox
