@@ -68,7 +68,7 @@ Dans **Outils / Paramètres / Performances**, le mappage SSD des modèles texte 
 ## Appels d'outils par les modèles
 
 
-Les outils web, code et génération d'images sont décrits dans les consignes système ajoutées au modèle pour chaque requête. `list_local_models` est toujours disponible : il retourne les modèles de texte GGUF détectés, leur nom et leur chemin exact. Il peut servir à choisir un modèle pour un sous-agent. Si un modèle d'image par défaut est défini dans **Outils / Paramètres / Modèles par défaut**, le modèle de texte peut appeler `generate_image` : il rédige le prompt positif et négatif et choisit les dimensions, étapes, guidage et graine. Le backend sélectionne le profil compatible avec la famille du modèle, enregistre l'image dans `Pictures\LocalIARunner` et ajoute un lien pour l'ouvrir. Sans modèle d'image par défaut, cet outil n'est pas proposé.
+Les outils web, code et génération d'images sont décrits dans les consignes système ajoutées au modèle pour chaque requête. `list_local_models` est toujours disponible : il retourne les modèles de texte GGUF détectés, leur nom et leur chemin exact. Il peut servir à choisir un modèle pour un sous-agent. Si un modèle d'image par défaut est défini dans **Outils / Paramètres / Modèles par défaut**, le modèle de texte peut appeler `generate_image` : il rédige le prompt positif et négatif et choisit les dimensions, étapes, guidage et graine. Le backend sélectionne le profil compatible avec la famille du modèle, enregistre l'image dans `Pictures\LocalIARunner` et l'attache à la réponse. Si le modèle de texte accepte les images et possède un projecteur `.mmproj`, l'image lui est aussi jointe dans le résultat de l'outil pour qu'il puisse l'examiner. Sans capacité vision, il reçoit le chemin du fichier, mais ne peut pas voir son contenu. Sans modèle d'image par défaut, cet outil n'est pas proposé.
 
 Dans **Outils / Paramètres / Outils et accès**, **Commandes système directes** est désactivé par défaut. Une fois autorisé, `run_system_command` lance un programme avec les droits Windows de l'utilisateur; son dossier de départ est limité au dossier de travail et un délai maximal s'applique. Cette permission est séparée de l'exécution Python. Un script Python autorisé peut lui aussi lancer des commandes système.
 
@@ -136,3 +136,4 @@ LocalAIApp/
   WinFormsApp/Installer/licenses/
   PythonBackend/ai_backend.py
 ```
+

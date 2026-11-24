@@ -1295,13 +1295,13 @@ namespace LocalAIApp
                                 _chatPanel.EndStreamingMessage(msg.Content ?? "");
                                 System.Diagnostics.Debug.WriteLine($"[C# stream_end] EndStreamingMessage done");
                                 Log("stream message finalized");
-                                if (!string.IsNullOrWhiteSpace(msg.Content))
+                                var streamMedia = ImportGeneratedMedia(msg.Media);
+                                if (!string.IsNullOrWhiteSpace(msg.Content) || streamMedia.Count > 0)
                                 {
-                                    var streamMedia = ImportGeneratedMedia(msg.Media);
                                     _currentConversation.Add(new Message
                                     {
                                         Role = "assistant",
-                                        Content = msg.Content,
+                                        Content = msg.Content ?? "",
                                         Attachments = streamMedia,
                                         Timestamp = DateTime.Now
                                     });
