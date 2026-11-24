@@ -2337,7 +2337,8 @@ class LlamaCppBackend:
                  ultra_lite=False, attachments=None, goal_mode=False,
                  enable_system_commands=False, use_disk_for_image_memory=False,
                  image_engine_memory_limit_gb=4, image_minimum_free_disk_gb=5,
-                 default_omni_model_path=None, keep_chat_model_loaded_for_omni=False):
+                 default_omni_model_path=None, keep_chat_model_loaded_for_omni=False,
+                 conversation_title_model_path=None):
         """Generate through the persistent server; weights stay loaded between turns."""
         try:
             try:
@@ -2516,10 +2517,15 @@ class LlamaCppBackend:
             # already-loaded server. Only start the assistant response after
             # the final title has been delivered to the UI and saved.
             if not ultra_lite and stream and generate_title and conversation_id:
-                title_completed = self._stream_conversation_title(
+                title_completed = self._stream_conversation_title_with_model(
                     conversation_id,
                     title_messages or [{"role": "user", "content": original_prompt_for_title}],
-                    conversation_title_prompt
+                    conversation_title_prompt,
+                    conversation_title_model_path,
+                    ngl,
+                    threads,
+                    context_size,
+                    use_mmap
                 )
                 if not title_completed:
                     self.send({
@@ -2625,6 +2631,75 @@ class LlamaCppBackend:
                 "content": "",
                 "cancelled": cancelled
             })
+
+    def _stream_conversation_title_with_model(self, conversation_id, messages, title_prompt,
+                                              title_model_path, ngl, threads, context_size, use_mmap):
+        """Use an optional dedicated GGUF for the title, then restore the chat model."""
+        requested_path = str(title_model_path or "").strip()
+        original_path = str(getattr(self, "model_path", "") or "").strip()
+        if not requested_path or not original_path:
+            return self._stream_conversation_title(conversation_id, messages, title_prompt)
+
+        try:
+            requested_file = Path(requested_path).expanduser()
+            original_file = Path(original_path).expanduser()
+            if (not requested_file.is_file() or requested_file.suffix.casefold() != ".gguf"
+                    or "mmproj" in requested_file.stem.casefold()):
+                self.send({
+                    "type": "debug",
+                    "content": "Le modèle de nommage dédié est absent ou invalide; le titre utilisera le modèle du chat."
+                })
+                return self._stream_conversation_title(conversation_id, messages, title_prompt)
+            if requested_file.resolve() == original_file.resolve():
+                return self._stream_conversation_title(conversation_id, messages, title_prompt)
+            requested_path = str(requested_file.resolve())
+            original_path = str(original_file.resolve())
+        except (OSError, RuntimeError, ValueError):
+            self.send({
+                "type": "debug",
+                "content": "Impossible de vérifier le modèle de nommage dédié; le titre utilisera le modèle du chat."
+            })
+            return self._stream_conversation_title(conversation_id, messages, title_prompt)
+
+        def restore_chat_model():
+            cancelled = self._cancel_requested.is_set()
+            if cancelled:
+                self._cancel_requested.clear()
+            restored = False
+            try:
+                restored = self.load_model(
+                    original_path, ngl=ngl, threads=threads,
+                    context_size=context_size, use_mmap=use_mmap, notify_ui=False
+                )
+            finally:
+                if cancelled:
+                    self._cancel_requested.set()
+            if not restored:
+                raise RuntimeError(
+                    "Le modèle de conversation n'a pas pu être rechargé après le nommage du chat."
+                )
+            return cancelled
+
+        self.send({"type": "model_loading", "content": "Chargement du modèle dédié au nommage…"})
+        loaded = self.load_model(
+            requested_path, ngl=ngl, threads=threads,
+            context_size=context_size, use_mmap=use_mmap, notify_ui=False
+        )
+        if not loaded:
+            cancelled = restore_chat_model()
+            if cancelled:
+                self._send_empty_conversation_title(conversation_id, cancelled=True)
+                return False
+            self.send({
+                "type": "debug",
+                "content": "Impossible de charger le modèle de nommage dédié; le titre utilisera le modèle du chat."
+            })
+            return self._stream_conversation_title(conversation_id, messages, title_prompt)
+
+        try:
+            return self._stream_conversation_title(conversation_id, messages, title_prompt)
+        finally:
+            restore_chat_model()
 
     def _stream_conversation_title(self, conversation_id, messages, title_prompt=None):
         """Stream a short title in a separate request before the assistant reply."""
@@ -6330,6 +6405,7 @@ def main():
                 image_minimum_free_disk_gb = request.get("image_minimum_free_disk_gb", 5)
                 default_omni_model_path = request.get("default_omni_model_path", "")
                 keep_chat_model_loaded_for_omni = request.get("keep_chat_model_loaded_for_omni", False)
+                conversation_title_model_path = request.get("conversation_title_model_path", "")
 
                 if not backend.begin_generation():
                     backend.send({"type": "error", "content": "Une generation est deja en cours."})
@@ -6352,7 +6428,7 @@ def main():
                                attachments, goal_mode, enable_system_commands,
                                use_disk_for_image_memory, image_engine_memory_limit_gb,
                                image_minimum_free_disk_gb, default_omni_model_path,
-                               keep_chat_model_loaded_for_omni),
+                                keep_chat_model_loaded_for_omni, conversation_title_model_path),
                         daemon=False  # Non-daemon so we can wait
                     )
                     t.start()

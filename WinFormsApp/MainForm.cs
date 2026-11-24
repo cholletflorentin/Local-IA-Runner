@@ -1785,6 +1785,8 @@ namespace LocalAIApp
                     generate_title = shouldGenerateConversationTitle,
                     title_messages = titleMessages,
                     conversation_title_prompt = _appSettings.UltraLiteMode ? null : _appSettings.ConversationTitlePrompt,
+                    conversation_title_model_path = !_appSettings.UltraLiteMode && _appSettings.UseDedicatedConversationTitleModel
+                        ? _appSettings.ConversationTitleModelPath : "",
                     prompt = text, 
                     goal_mode = goalMode,
                     history = history.ToArray(),
@@ -3008,6 +3010,8 @@ namespace LocalAIApp
         public string DefaultImageModelPath { get; set; } = "";
         public string DefaultOmniModelPath { get; set; } = "";
         public bool KeepChatModelLoadedForOmni { get; set; } = false;
+        public bool UseDedicatedConversationTitleModel { get; set; } = false;
+        public string ConversationTitleModelPath { get; set; } = "";
         public bool UltraLiteMode { get; set; } = false;
         public bool EnableWebAccess { get; set; } = true;
         public bool EnableCodeExecution { get; set; } = false;
@@ -4921,6 +4925,9 @@ namespace LocalAIApp
         private ModernTextBox _defaultImageModelPathTextBox = null!;
         private ModernTextBox _defaultOmniModelPathTextBox = null!;
         private CheckBox _keepChatModelLoadedForOmniCheckBox = null!;
+        private CheckBox _useDedicatedConversationTitleModelCheckBox = null!;
+        private ModernTextBox _conversationTitleModelPathTextBox = null!;
+        private Control _conversationTitleModelPicker = null!;
         private CheckBox _webAccessCheckBox = null!;
         private CheckBox _codeExecutionCheckBox = null!;
         private CheckBox _systemCommandCheckBox = null!;
@@ -4966,6 +4973,8 @@ namespace LocalAIApp
                 DefaultImageModelPath = currentSettings.DefaultImageModelPath ?? "",
                 DefaultOmniModelPath = currentSettings.DefaultOmniModelPath ?? "",
                 KeepChatModelLoadedForOmni = currentSettings.KeepChatModelLoadedForOmni,
+                UseDedicatedConversationTitleModel = currentSettings.UseDedicatedConversationTitleModel,
+                ConversationTitleModelPath = currentSettings.ConversationTitleModelPath ?? "",
                 UltraLiteMode = currentSettings.UltraLiteMode,
                 SearchAllDrivesForModels = currentSettings.SearchAllDrivesForModels,
                 EnableWebAccess = currentSettings.EnableWebAccess,
@@ -5076,6 +5085,33 @@ namespace LocalAIApp
                 "Modèle de texte par défaut",
                 "Modèle GGUF sélectionné au démarrage. Si le champ est vide ou que le fichier manque, l'application choisit le premier GGUF détecté.",
                 CreateModelPathPicker(_defaultTextModelPathTextBox, BrowseDefaultTextModel),
+                editorBelowTitle: true,
+                height: 112));
+
+            _useDedicatedConversationTitleModelCheckBox = new CheckBox
+            {
+                Text = "Utiliser un modèle dédié pour nommer les conversations",
+                AutoSize = true,
+                ForeColor = ThemeColors.TextPrimary,
+                BackColor = ThemeColors.Surface,
+                FlatStyle = FlatStyle.Flat
+            };
+            content.Controls.Add(CreateSettingCard(
+                "Modèle de nommage des conversations",
+                "Désactivé par défaut : le modèle du chat crée le titre. Activé : le modèle choisi ci-dessous crée le titre avant la réponse, puis le modèle du chat est rechargé pour répondre.",
+                _useDedicatedConversationTitleModelCheckBox,
+                height: 96));
+
+            _conversationTitleModelPathTextBox = CreateModelPathTextBox();
+            _conversationTitleModelPicker = CreateModelPathPicker(
+                _conversationTitleModelPathTextBox, BrowseConversationTitleModel);
+            _conversationTitleModelPicker.Enabled = false;
+            _useDedicatedConversationTitleModelCheckBox.CheckedChanged += (_, _) =>
+                _conversationTitleModelPicker.Enabled = _useDedicatedConversationTitleModelCheckBox.Checked;
+            content.Controls.Add(CreateSettingCard(
+                "Modèle GGUF dédié",
+                "Choisis un modèle local pour générer les titres. Si le fichier est indisponible, l'application reprend le modèle du chat.",
+                _conversationTitleModelPicker,
                 editorBelowTitle: true,
                 height: 112));
 
@@ -5633,6 +5669,20 @@ namespace LocalAIApp
                 _defaultTextModelPathTextBox.Text = dialog.FileName;
         }
 
+        private void BrowseConversationTitleModel(object? sender, EventArgs e)
+        {
+            using var dialog = new OpenFileDialog
+            {
+                Title = "Choisir le modèle GGUF de nommage des conversations",
+                Filter = "Modèles GGUF (*.gguf)|*.gguf|Tous les fichiers (*.*)|*.*",
+                CheckFileExists = true,
+                FileName = File.Exists(_conversationTitleModelPathTextBox.Text)
+                    ? _conversationTitleModelPathTextBox.Text : ""
+            };
+            if (dialog.ShowDialog(this) == DialogResult.OK)
+                _conversationTitleModelPathTextBox.Text = dialog.FileName;
+        }
+
         private void BrowseDefaultImageModel(object? sender, EventArgs e)
         {
             using var dialog = new OpenFileDialog
@@ -5673,6 +5723,9 @@ namespace LocalAIApp
             _defaultImageModelPathTextBox.Text = Settings.DefaultImageModelPath ?? "";
             _defaultOmniModelPathTextBox.Text = Settings.DefaultOmniModelPath ?? "";
             _keepChatModelLoadedForOmniCheckBox.Checked = Settings.KeepChatModelLoadedForOmni;
+            _useDedicatedConversationTitleModelCheckBox.Checked = Settings.UseDedicatedConversationTitleModel;
+            _conversationTitleModelPathTextBox.Text = Settings.ConversationTitleModelPath ?? "";
+            _conversationTitleModelPicker.Enabled = Settings.UseDedicatedConversationTitleModel;
             _searchAllModelDrivesCheckBox.Checked = Settings.SearchAllDrivesForModels;
             _webAccessCheckBox.Checked = Settings.EnableWebAccess;
             _codeExecutionCheckBox.Checked = Settings.EnableCodeExecution;
@@ -5718,6 +5771,8 @@ namespace LocalAIApp
             Settings.DefaultImageModelPath = _defaultImageModelPathTextBox.Text.Trim();
             Settings.DefaultOmniModelPath = _defaultOmniModelPathTextBox.Text.Trim();
             Settings.KeepChatModelLoadedForOmni = _keepChatModelLoadedForOmniCheckBox.Checked;
+            Settings.UseDedicatedConversationTitleModel = _useDedicatedConversationTitleModelCheckBox.Checked;
+            Settings.ConversationTitleModelPath = _conversationTitleModelPathTextBox.Text.Trim();
             Settings.SearchAllDrivesForModels = _searchAllModelDrivesCheckBox.Checked;
             Settings.EnableWebAccess = _webAccessCheckBox.Checked;
             Settings.EnableCodeExecution = _codeExecutionCheckBox.Checked;
