@@ -2,14 +2,23 @@
 
 Cette application Uno est ajoutée à côté de l'application WinForms. Le code WinForms et son backend existant restent en place et continuent d'être la version principale.
 
-## Ce que contient cette première bêta
+## Ce que contient cette bêta
 
 - Une interface commune pour Windows, Linux, macOS et Android, écrite en C# et XAML avec Uno Platform.
 - Une liste de discussions enregistrée localement, avec réponses en streaming et bouton d'annulation.
 - Une connexion à un serveur compatible avec l'API OpenAI de llama.cpp (`/v1/models` et `/v1/chat/completions`).
 - Une adresse de serveur et une clé API configurables depuis l'application.
+- Les archives desktop incluent le moteur CPU llama.cpp b12676 et un petit lanceur pour démarrer le serveur.
+- Les notices de licence sont incluses dans chaque archive desktop.
 
-Cette bêta Uno n'embarque pas encore llama.cpp ou stable-diffusion.cpp et ne reprend pas encore les outils, les réglages avancés, le forum, les sous-agents ni les fonctions propres au backend WinForms. Il faut lancer un serveur llama.cpp séparément et connecter l'application à son API. Les fichiers et les fonctions de la version WinForms restent conservés dans le dépôt.
+L'application Uno reste un client : elle ne charge pas directement les modèles et ne démarre pas le moteur toute seule. Sur Windows, Linux et macOS, utilise `run-llama-server.cmd` ou `sh ./run-llama-server.sh` depuis le dossier de l'archive, en passant le chemin d'un modèle GGUF. Exemple :
+
+```text
+Windows : run-llama-server.cmd -m "C:\ia\text\modele.gguf" --host 127.0.0.1 --port 8080
+Linux/macOS : sh ./run-llama-server.sh -m "/chemin/vers/modele.gguf" --host 127.0.0.1 --port 8080
+```
+
+Configure ensuite `http://127.0.0.1:8080` dans l'application. L'APK Android reste un client réseau; la préversion GitHub fournit séparément l'archive llama.cpp b12676 pour Android ARM64. L'application Uno ne reprend pas encore stable-diffusion.cpp, les outils, le forum, les sous-agents ni les autres fonctions propres au backend WinForms. Les fichiers et les fonctions de la version WinForms restent conservés dans le dépôt.
 
 Les conversations sont enregistrées localement dans le dossier de données de l'application. La clé API reste seulement en mémoire pendant l'exécution et n'est pas enregistrée.
 

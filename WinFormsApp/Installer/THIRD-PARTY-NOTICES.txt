@@ -6,7 +6,7 @@ Microsoft .NET 10 runtime
 Python 3.13.17 (Windows embeddable package)
   Python Software Foundation license. See PythonRuntime\LICENSE.txt.
 
-llama.cpp b12244
+llama.cpp b12676
   MIT License. See Licenses\llama.cpp-LICENSE.txt.
   LLVM OpenMP runtime license: see llama-bin\LICENSE-LLVM-OpenMP.
 

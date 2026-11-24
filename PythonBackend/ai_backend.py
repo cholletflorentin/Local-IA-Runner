@@ -529,6 +529,13 @@ class LlamaCppBackend:
         if self.llama_server_path and Path(self.llama_server_path).exists():
             return self.llama_server_path
 
+        # Prefer the current packaged CPU runtime over an older user-cache copy.
+        bundled_cpu_server = self._find_server_in_dir(self.bundled_cpu_llama_dir)
+        if self.device == "cpu" and bundled_cpu_server:
+            self.llama_server_path = bundled_cpu_server
+            self.send({"type": "model_loading", "content": "llama.cpp CPU inclus avec l'installation."})
+            return bundled_cpu_server
+
         # Check cache file
         if self.cache_file.exists():
             try:
@@ -553,12 +560,6 @@ class LlamaCppBackend:
             if server_path:
                 self._save_server_cache(server_path)
                 return server_path
-
-        bundled_cpu_server = self._find_server_in_dir(self.bundled_cpu_llama_dir)
-        if self.device == "cpu" and bundled_cpu_server:
-            self.llama_server_path = bundled_cpu_server
-            self.send({"type": "model_loading", "content": "llama.cpp CPU inclus avec l'installation."})
-            return bundled_cpu_server
 
         # Download and install
         self.send({"type": "model_loading", "content": "Downloading llama.cpp..."})

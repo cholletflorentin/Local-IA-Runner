@@ -28,18 +28,26 @@ jobs:
             runner: windows-latest
             rid: win-x64
             archive: LocalIARunner-Uno-Windows-x64.zip
+            llama_asset: llama-b12676-bin-win-cpu-x64.zip
+            llama_sha256: fdf78a3924fe92ccfb24af58544a6dccbc1feeb0587e77fca9ec3bef6737086c
           - label: Linux x64
             runner: ubuntu-latest
             rid: linux-x64
             archive: LocalIARunner-Uno-Linux-x64.zip
+            llama_asset: llama-b12676-bin-ubuntu-x64.tar.gz
+            llama_sha256: c65369a8574d096d90c593fef0e77a1ba2abfdfa7e7e9426bbf8939781ef8a07
           - label: macOS x64
             runner: macos-15-intel
             rid: osx-x64
             archive: LocalIARunner-Uno-macOS-x64.zip
+            llama_asset: llama-b12676-bin-macos-x64.tar.gz
+            llama_sha256: 10f36c786606e874f7440a87b48716dbd19f4bc6670e7dcd005e43c61977e6ef
           - label: macOS ARM64
             runner: macos-latest
             rid: osx-arm64
             archive: LocalIARunner-Uno-macOS-arm64.zip
+            llama_asset: llama-b12676-bin-macos-arm64.tar.gz
+            llama_sha256: a222d1ba06a3f0215fa7d22f372af6ba74c5b4cfca5f6b2aa6974c7b63017b59
     steps:
       - name: Check out source
         uses: actions/checkout@v7
@@ -52,6 +60,44 @@ jobs:
       - name: Publish desktop app
         working-directory: UnoApp
         run: dotnet publish LocalIARunner.Uno.csproj -c Release -f net10.0-desktop -r ${{ matrix.rid }} -p:TargetFrameworks=net10.0-desktop -p:SelfContained=true -p:UseMonoRuntime=false -o "${{ runner.temp }}/uno-publish"
+
+      - name: Bundle llama.cpp b12676
+        shell: pwsh
+        run: |
+          $assetName = '${{ matrix.llama_asset }}'
+          $expectedSha256 = '${{ matrix.llama_sha256 }}'
+          $archivePath = Join-Path '${{ runner.temp }}' $assetName
+          $engineDirectory = Join-Path '${{ runner.temp }}' 'uno-publish/llama-bin'
+          New-Item -ItemType Directory -Force -Path $engineDirectory | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/ggml-org/llama.cpp/releases/download/b12676/$assetName" -OutFile $archivePath
+          $actualSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) { throw "llama.cpp archive hash mismatch: $assetName" }
+          if ($assetName.EndsWith('.zip', [StringComparison]::OrdinalIgnoreCase)) {
+            Expand-Archive -LiteralPath $archivePath -DestinationPath $engineDirectory -Force
+          }
+          else {
+            & tar -xzf $archivePath -C $engineDirectory
+            if ($LASTEXITCODE -ne 0) { throw "Could not extract $assetName" }
+          }
+          $serverName = if ($IsWindows) { 'llama-server.exe' } else { 'llama-server' }
+          $server = Get-ChildItem -LiteralPath $engineDirectory -Filter $serverName -File -Recurse | Select-Object -First 1
+          if (-not $server) { throw "$serverName is missing from $assetName" }
+          if (-not $IsWindows) {
+            & chmod +x $server.FullName
+            if ($LASTEXITCODE -ne 0) { throw 'Could not mark llama-server executable.' }
+          }
+          if ($IsWindows) {
+            foreach ($runtimeName in @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')) {
+              $runtimeSource = Join-Path $env:WINDIR "System32/$runtimeName"
+              if (-not (Test-Path -LiteralPath $runtimeSource)) { throw "Missing MSVC runtime: $runtimeSource" }
+              Copy-Item -LiteralPath $runtimeSource -Destination $server.DirectoryName -Force
+            }
+          }
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'WinFormsApp/Installer/licenses/llama.cpp-LICENSE.txt') -Destination (Join-Path $engineDirectory 'LICENSE-llama.cpp.txt')
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'UnoApp/run-llama-server.cmd') -Destination (Join-Path '${{ runner.temp }}' 'uno-publish')
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'UnoApp/run-llama-server.sh') -Destination (Join-Path '${{ runner.temp }}' 'uno-publish')
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'UnoApp/README.md') -Destination (Join-Path '${{ runner.temp }}' 'uno-publish')
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'UnoApp/THIRD-PARTY-NOTICES.txt') -Destination (Join-Path '${{ runner.temp }}' 'uno-publish')
 
       - name: Package desktop app
         shell: pwsh
@@ -136,6 +182,22 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+      - name: Download llama.cpp b12676 for Android ARM64
+        shell: pwsh
+        run: |
+          $archivePath = Join-Path '${{ runner.temp }}' 'LocalIARunner-Uno-llama.cpp-b12676-Android-arm64.tar.gz'
+          Invoke-WebRequest -Uri 'https://github.com/ggml-org/llama.cpp/releases/download/b12676/llama-b12676-bin-android-arm64.tar.gz' -OutFile $archivePath
+          $actualSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne 'b357eab59d818f4f25f6908d4ea1d3142710c5a2c9fd5755d1e66f297a140dcc') { throw 'llama.cpp Android archive hash mismatch.' }
+
+      - name: Upload Android llama.cpp companion archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalIARunner-Uno-llama.cpp-b12676-Android-arm64.tar.gz
+          path: ${{ runner.temp }}/LocalIARunner-Uno-llama.cpp-b12676-Android-arm64.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+
   release-beta:
     name: Publish GitHub beta release
     needs: [desktop, android]
@@ -155,15 +217,14 @@ jobs:
           cat > release-notes.md <<'NOTES'
           ## Local IA Runner — bêta Uno Platform
 
-          Première bêta de l'application multi-plateforme Uno, publiée séparément de la version WinForms stable.
+          Version mise à jour de l'application multi-plateforme Uno, publiée séparément de la version WinForms stable.
 
           ### Téléchargements
-          - Windows x64, Linux x64 et macOS ARM64 : archives portables de l'interface Uno.
-          - macOS x64 : archive portable compatible Intel.
-          - Android : APK de test.
+          - Windows x64, Linux x64 et macOS x64/ARM64 : archives portables de l'interface Uno avec llama.cpp b12676 CPU et un lanceur.
+          - Android : APK de test et archive compagnon llama.cpp b12676 pour Android ARM64.
 
           ### À savoir
-          Cette bêta est un client de chat qui se connecte à un serveur llama.cpp compatible avec l'API OpenAI. Le moteur llama.cpp doit être lancé séparément. L'intégration du backend Python, de stable-diffusion.cpp, des outils, du forum, des sous-agents et des réglages avancés n'est pas encore portée dans l'application Uno. Le code et l'application WinForms existants restent conservés. L'APK de test est signé avec une clé temporaire; il faut désinstaller l'ancienne bêta Android avant d'installer celle-ci.
+          L'application Uno reste un client de chat : le modèle GGUF et le serveur doivent être lancés séparément. Sur ordinateur, les archives incluent llama.cpp et `run-llama-server.cmd` ou `run-llama-server.sh`. Sur Android, l'archive compagnon est séparée de l'APK et l'application doit se connecter à un serveur compatible déjà démarré. L'intégration du backend Python, de stable-diffusion.cpp, des outils, du forum, des sous-agents et des réglages avancés n'est pas encore portée dans l'application Uno. L'APK de test est signé avec une clé temporaire; il faut désinstaller l'ancienne bêta Android avant d'installer celle-ci.
           NOTES
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber

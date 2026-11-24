@@ -165,11 +165,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host '[4/7] Téléchargement et vérification du moteur llama.cpp CPU...'
-$llamaZip = Join-Path $downloadDir 'llama-b12244-bin-win-cpu-x64.zip'
+$llamaZip = Join-Path $downloadDir 'llama-b12676-bin-win-cpu-x64.zip'
 Get-VerifiedDownload `
-    -Uri 'https://github.com/ggml-org/llama.cpp/releases/download/b12244/llama-b12244-bin-win-cpu-x64.zip' `
+    -Uri 'https://github.com/ggml-org/llama.cpp/releases/download/b12676/llama-b12676-bin-win-cpu-x64.zip' `
     -Path $llamaZip `
-    -Sha256 '318F11FADCBC3A86541EC55D9930CC76646C6B8D2FF18798C8477E9FF0DC452A'
+    -Sha256 'FDF78A3924FE92CCFB24AF58544A6DCCBC1FEEB0587E77FCA9EC3BEF6737086C'
 $llamaDir = Join-Path $stageDir 'llama-bin'
 New-Item -ItemType Directory -Force -Path $llamaDir | Out-Null
 Expand-Archive -LiteralPath $llamaZip -DestinationPath $llamaDir -Force
