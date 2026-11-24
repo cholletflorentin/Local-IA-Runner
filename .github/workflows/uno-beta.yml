@@ -136,6 +136,17 @@ jobs:
         working-directory: UnoApp
         run: dotnet workload install android
 
+      - name: Bundle llama.cpp b12676 into the APK
+        shell: pwsh
+        run: |
+          $assetDirectory = Join-Path $env:GITHUB_WORKSPACE 'UnoApp/Assets'
+          New-Item -ItemType Directory -Force -Path $assetDirectory | Out-Null
+          $archivePath = Join-Path $assetDirectory 'llama-b12676-android-arm64.tar.gz'
+          Invoke-WebRequest -Uri 'https://github.com/ggml-org/llama.cpp/releases/download/b12676/llama-b12676-bin-android-arm64.tar.gz' -OutFile $archivePath
+          $actualSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne 'b357eab59d818f4f25f6908d4ea1d3142710c5a2c9fd5755d1e66f297a140dcc') { throw 'llama.cpp Android archive hash mismatch.' }
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'WinFormsApp/Installer/licenses/llama.cpp-LICENSE.txt') -Destination (Join-Path $assetDirectory 'llama.cpp-LICENSE.txt')
+
       - name: Sign and publish installable beta APK
         shell: pwsh
         working-directory: UnoApp
@@ -182,22 +193,6 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      - name: Download llama.cpp b12676 for Android ARM64
-        shell: pwsh
-        run: |
-          $archivePath = Join-Path '${{ runner.temp }}' 'LocalIARunner-Uno-llama.cpp-b12676-Android-arm64.tar.gz'
-          Invoke-WebRequest -Uri 'https://github.com/ggml-org/llama.cpp/releases/download/b12676/llama-b12676-bin-android-arm64.tar.gz' -OutFile $archivePath
-          $actualSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualSha256 -ne 'b357eab59d818f4f25f6908d4ea1d3142710c5a2c9fd5755d1e66f297a140dcc') { throw 'llama.cpp Android archive hash mismatch.' }
-
-      - name: Upload Android llama.cpp companion archive
-        uses: actions/upload-artifact@v4
-        with:
-          name: LocalIARunner-Uno-llama.cpp-b12676-Android-arm64.tar.gz
-          path: ${{ runner.temp }}/LocalIARunner-Uno-llama.cpp-b12676-Android-arm64.tar.gz
-          if-no-files-found: error
-          retention-days: 3
-
   release-beta:
     name: Publish GitHub beta release
     needs: [desktop, android]
@@ -221,10 +216,10 @@ jobs:
 
           ### Téléchargements
           - Windows x64, Linux x64 et macOS x64/ARM64 : archives portables de l'interface Uno avec llama.cpp b12676 CPU et un lanceur.
-          - Android : APK de test et archive compagnon llama.cpp b12676 pour Android ARM64.
+          - Android : APK de test avec l'archive llama.cpp b12676 pour Android ARM64 intégrée.
 
           ### À savoir
-          L'application Uno reste un client de chat : le modèle GGUF et le serveur doivent être lancés séparément. Sur ordinateur, les archives incluent llama.cpp et `run-llama-server.cmd` ou `run-llama-server.sh`. Sur Android, l'archive compagnon est séparée de l'APK et l'application doit se connecter à un serveur compatible déjà démarré. L'intégration du backend Python, de stable-diffusion.cpp, des outils, du forum, des sous-agents et des réglages avancés n'est pas encore portée dans l'application Uno. L'APK de test est signé avec une clé temporaire; il faut désinstaller l'ancienne bêta Android avant d'installer celle-ci.
+          L'application Uno reste un client de chat : le modèle GGUF et le serveur doivent être lancés séparément. Sur ordinateur, les archives incluent llama.cpp et `run-llama-server.cmd` ou `run-llama-server.sh`. L'APK inclut maintenant le paquet llama.cpp Android ARM64; l'application ne démarre pas encore ce moteur elle-même et doit se connecter à un serveur compatible déjà lancé. L'intégration du backend Python, de stable-diffusion.cpp, des outils, du forum, des sous-agents et des réglages avancés n'est pas encore portée dans l'application Uno. L'APK de test est signé avec une clé temporaire; il faut désinstaller l'ancienne bêta Android avant d'installer celle-ci.
           NOTES
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber

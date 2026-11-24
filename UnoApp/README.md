@@ -18,7 +18,7 @@ Windows : run-llama-server.cmd -m "C:\ia\text\modele.gguf" --host 127.0.0.1 --po
 Linux/macOS : sh ./run-llama-server.sh -m "/chemin/vers/modele.gguf" --host 127.0.0.1 --port 8080
 ```
 
-Configure ensuite `http://127.0.0.1:8080` dans l'application. L'APK Android reste un client réseau; la préversion GitHub fournit séparément l'archive llama.cpp b12676 pour Android ARM64. L'application Uno ne reprend pas encore stable-diffusion.cpp, les outils, le forum, les sous-agents ni les autres fonctions propres au backend WinForms. Les fichiers et les fonctions de la version WinForms restent conservés dans le dépôt.
+Configure ensuite `http://127.0.0.1:8080` dans l'application. L'APK Android contient l'archive compressée llama.cpp b12676 pour ARM64; l'interface Uno reste toutefois un client réseau et ne lance pas encore le serveur Android elle-même. L'application Uno ne reprend pas encore stable-diffusion.cpp, les outils, le forum, les sous-agents ni les autres fonctions propres au backend WinForms. Les fichiers et les fonctions de la version WinForms restent conservés dans le dépôt.
 
 Les conversations sont enregistrées localement dans le dossier de données de l'application. La clé API reste seulement en mémoire pendant l'exécution et n'est pas enregistrée.
 
@@ -28,8 +28,15 @@ Lance un serveur llama.cpp avec un modèle GGUF, puis dans l'application saisis 
 
 Sur Android, `127.0.0.1` désigne le téléphone lui-même. Pour joindre un serveur sur un autre ordinateur, indique son adresse IP locale et configure llama.cpp pour accepter les connexions du réseau local. L'application n'accepte HTTP que pour localhost et les adresses privées; les adresses publiques doivent utiliser HTTPS. N'expose pas un serveur sans authentification sur un réseau public.
 
-## Téléchargements bêta
+## Installer les versions bêta
 
-Les archives Windows, Linux et macOS (Intel et ARM64), ainsi que l'APK Android, sont publiés dans les préversions GitHub intitulées **Local IA Runner — bêta Uno Platform**. Ce sont des versions de test séparées des releases stables WinForms. L'APK est signé avec une clé temporaire de compilation; il faut désinstaller une bêta précédente avant d'installer la suivante.
+Télécharge les paquets depuis la dernière préversion GitHub intitulée **Local IA Runner — bêta Uno Platform**. Cette bêta est distincte de la version WinForms stable.
+
+- **Windows** : extrais `LocalIARunner-Uno-Windows-x64.zip`, puis lance `LocalIARunner.Uno.exe`.
+- **Linux** : extrais `LocalIARunner-Uno-Linux-x64.zip`, puis lance `./LocalIARunner.Uno` depuis le dossier extrait. Si nécessaire, rends le fichier exécutable avec `chmod +x ./LocalIARunner.Uno`.
+- **macOS** : extrais l'archive correspondant au processeur (`macOS-x64` pour Intel ou `macOS-arm64` pour Apple Silicon), puis lance `./LocalIARunner.Uno` depuis Terminal. Cette bêta n'est pas signée ni notarisée.
+- **Android** : télécharge `LocalIARunner-Uno-Android.apk`, ouvre-le sur le téléphone et confirme l'installation depuis ta source de téléchargement. L'APK contient llama.cpp b12676; l'application doit encore se connecter à un serveur déjà lancé.
+
+L'APK est signé avec une clé temporaire de compilation; désinstalle une bêta précédente avant d'installer la suivante.
 
 Pour développer avec le projet, installer le SDK .NET 10 et suivre les prérequis Uno Platform pour Android. Le projet est ciblé par `global.json` avec `Uno.Sdk` 6.7.30.

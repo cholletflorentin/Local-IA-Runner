@@ -12,4 +12,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UnoFeatures>Skia</UnoFeatures>
   </PropertyGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-android'">
+    <AndroidAsset Include="Assets/llama-b12676-android-arm64.tar.gz" />
+    <AndroidAsset Include="Assets/llama.cpp-LICENSE.txt" />
+    <AndroidAsset Include="THIRD-PARTY-NOTICES.txt" />
+  </ItemGroup>
 </Project>
