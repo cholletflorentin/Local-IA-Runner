@@ -1876,21 +1876,47 @@ class LlamaCppBackend:
                     error = status.get("error") or {}
                     message = error.get("message", "Génération annulée.") if isinstance(error, dict) else str(error)
                     if state == "failed":
+                        engine_log = self._read_log_tail(self._sd_server_log) if self._sd_server_log else ""
+                        log_lines = engine_log.splitlines()
+                        memory_markers = (
+                            "ram weight capacity exceeded",
+                            "ram graph capacity exceeded",
+                            "out of memory",
+                            "not enough memory",
+                            "failed to allocate",
+                            "vk_error_out_of_device_memory",
+                            "vk_error_out_of_host_memory"
+                        )
+                        memory_lines = [
+                            line.strip() for line in log_lines
+                            if any(marker in line.casefold() for marker in memory_markers)
+                        ]
+                        memory_failure = bool(memory_lines)
+                        weight_memory_failure = any(
+                            "ram weight capacity exceeded" in line.casefold()
+                            for line in memory_lines
+                        )
+                        if memory_failure:
+                            message += "\n\nDétails mémoire du moteur :\n" + "\n".join(memory_lines[-6:])
+
                         can_retry_on_cpu = (
                             self._sd_server_variant == "vulkan"
                             and not request.get("_cpu_fallback_attempted")
                             and not self._cancel_requested.is_set()
-                            and any(marker in message.casefold() for marker in (
-                                "generate_image returned no results",
-                                "generate_image returned empty results",
-                                "returned empty encoded outputs"
-                            ))
+                            and (memory_failure or any(marker in message.casefold() for marker in (
+                                    "generate_image returned no results",
+                                    "generate_image returned empty results",
+                                    "returned empty encoded outputs"
+                                )))
                         )
                         if can_retry_on_cpu:
                             request["_cpu_fallback_attempted"] = True
                             self.send({
                                 "type": "image_engine_status",
                                 "content": (
+                                    "Vulkan manque de mémoire. Nouvel essai sur le processeur; "
+                                    "ce mode peut être plus lent…"
+                                    if memory_failure else
                                     "Vulkan n’a produit aucune image. Nouvel essai sur le processeur; "
                                     "ce mode peut être plus lent…"
                                 )
@@ -1920,7 +1946,8 @@ class LlamaCppBackend:
                         fallback_limit = self._next_image_fallback_limit(
                             width, height, bool(request.get("use_disk_for_memory"))
                         )
-                        if self._sd_server_variant == "cpu" and fallback_limit:
+                        if (self._sd_server_variant == "cpu" and fallback_limit
+                                and not weight_memory_failure):
                             scale = min(1.0, fallback_limit / max(width, height))
                             retry_width = max(64, int(round(width * scale / 64.0)) * 64)
                             retry_height = max(64, int(round(height * scale / 64.0)) * 64)

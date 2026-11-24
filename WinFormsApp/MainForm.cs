@@ -2295,6 +2295,8 @@ namespace LocalAIApp
                 "winerror 1455",
                 "error 1455",
                 "paging file is too small",
+                "ram weight capacity exceeded",
+                "ram graph capacity exceeded",
                 "mémoire insuffisante",
                 "manque de mémoire",
                 "pas assez de mémoire",
