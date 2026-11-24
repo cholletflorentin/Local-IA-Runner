@@ -107,8 +107,23 @@ jobs:
             '-p:AndroidSigningKeyAlias=uno-beta', "-p:AndroidSigningKeyPass=$password",
             "-p:AndroidSigningStorePass=$password", "-o", $publishDir
           )
-          & dotnet @publishArgs
-          if ($LASTEXITCODE -ne 0) { throw 'Android APK publishing failed.' }
+          $buildLog = Join-Path '${{ runner.temp }}' 'uno-android-build.log'
+          & dotnet @publishArgs 2>&1 | Tee-Object -FilePath $buildLog
+          $buildExitCode = $LASTEXITCODE
+          if ($buildExitCode -ne 0) {
+            $lines = Get-Content -LiteralPath $buildLog
+            $diagnostics = @($lines | Where-Object { $_ -match '(?i)(error|failed|APT\d+|resource .*not found|AndroidManifest)' } | Select-Object -Last 25)
+            if ($diagnostics.Count -eq 0) { $diagnostics = @($lines | Select-Object -Last 40) }
+            $details = @('## Android build diagnostics', '', '```text') + $diagnostics + @('```')
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ($details -join "`n") -Encoding utf8
+            }
+            foreach ($line in $diagnostics) {
+              $safeLine = $line.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Output "::error title=Android compiler detail::$safeLine"
+            }
+            throw "Android APK publishing failed with exit code $buildExitCode."
+          }
           $apk = Get-ChildItem -Path @($publishDir, 'bin/Release/net10.0-android') -Filter '*Signed.apk' -Recurse | Select-Object -First 1
           if (-not $apk) { throw 'The Android build did not produce an APK.' }
           Copy-Item -LiteralPath $apk.FullName -Destination '${{ runner.temp }}/LocalIARunner-Uno-Android.apk' -Force
