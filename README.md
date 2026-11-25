@@ -18,6 +18,7 @@ Application Windows WinForms (.NET 10) pour exécuter des modèles GGUF avec lla
 - Recherche complète facultative des modèles GGUF depuis la racine de tous les lecteurs fixes
 - Mise à jour automatique depuis la dernière release GitHub, avec vérification SHA-256
 - Interface de conversation modernisée avec mise en forme Markdown, liens cliquables et réflexion repliable
+- Mode de comparaison qui génère deux réponses indépendantes et les affiche côte à côte
 - Blocs de code avec commandes intégrées pour copier ou enregistrer les scripts
 
 ## Installation
@@ -53,8 +54,9 @@ Pour développer et lancer directement depuis les sources, compiler `WinFormsApp
 ## Utilisation
 
 1. Pour discuter, choisir le dossier contenant les modèles GGUF, sélectionner un fichier `.gguf` puis envoyer un message.
-2. Pour générer une image, ouvrir **Outils > Générer une image**, choisir le dossier de modèles stable-diffusion.cpp puis cliquer sur **Analyser les modèles**.
-3. Choisir un profil et ses composants, écrire un prompt et régler les dimensions, le nombre d'étapes et le guidage. L'application affiche la progression, permet d'annuler et enregistre l'image dans le dossier de sortie choisi.
+2. Pour comparer deux modèles, activer **Comparer deux modèles**, choisir le second GGUF puis envoyer le prompt. Les deux réponses sont générées séparément, affichées côte à côte et enregistrées avec la conversation; les outils restent désactivés pour éviter de répéter une action.
+3. Pour générer une image, ouvrir **Outils > Générer une image**, choisir le dossier de modèles stable-diffusion.cpp puis cliquer sur **Analyser les modèles**.
+4. Choisir un profil et ses composants, écrire un prompt et régler les dimensions, le nombre d'étapes et le guidage. L'application affiche la progression, permet d'annuler et enregistre l'image dans le dossier de sortie choisi.
 
 Pour les modèles de texte et multimodaux, le scan rapide consulte le dossier choisi et les emplacements habituels de LM Studio (`%USERPROFILE%\.lmstudio\models`), Jan, GPT4All, text-generation-webui et Pinokio. **Fichier > Rechercher les modèles (rapide)** relance ce scan ciblé. **Fichier > Rechercher les modèles sur tout le PC** parcourt les lecteurs locaux fixes et amovibles depuis leur racine; la recherche continue en arrière-plan et peut être arrêtée depuis **Fichier > Annuler la recherche des modèles**. Dans les paramètres, **Parcourir tous les lecteurs au démarrage** active ce mode complet aussi au démarrage et lors de l'actualisation. Il est désactivé par défaut. Les lecteurs réseau, les dossiers auxquels Windows refuse l'accès et les liens de jonction sont ignorés. Seuls les fichiers GGUF compatibles avec le chargement local sont répertoriés; aucun fichier n'est déplacé ni copié.
 
@@ -137,4 +139,5 @@ LocalAIApp/
   WinFormsApp/Installer/licenses/
   PythonBackend/ai_backend.py
 ```
+
 

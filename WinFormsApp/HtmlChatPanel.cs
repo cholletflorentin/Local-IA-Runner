@@ -141,6 +141,37 @@ public sealed class ChatPanel : DoubleBufferedPanel
             for (var index = 0; index < conversationMessages.Count; index++)
             {
                 var message = conversationMessages[index];
+                if (!string.IsNullOrWhiteSpace(message.ComparisonGroupId))
+                {
+                    var grouped = new List<Message> { message };
+                    while (index + 1 < conversationMessages.Count &&
+                           string.Equals(conversationMessages[index + 1].ComparisonGroupId,
+                               message.ComparisonGroupId, StringComparison.Ordinal))
+                        grouped.Add(conversationMessages[++index]);
+
+                    var columns = grouped
+                        .OrderBy(item => item.IsComparisonSecondary)
+                        .Select(item =>
+                        {
+                            var parsedAnswer = ParseThinking(item.Content ?? "");
+                            return new ComparisonColumn
+                            {
+                                Model = string.IsNullOrWhiteSpace(item.ModelName) ? "Modèle" : item.ModelName,
+                                Thinking = parsedAnswer.Thinking,
+                                Content = parsedAnswer.Response
+                            };
+                        })
+                        .ToList();
+                    _entries.Add(new ChatEntry
+                    {
+                        Role = "comparison",
+                        Sender = "Comparaison",
+                        Time = (message.Timestamp == default ? DateTime.Now : message.Timestamp).ToString("HH:mm"),
+                        Comparison = columns
+                    });
+                    continue;
+                }
+
                 var isUser = string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase);
                 var parsed = ParseThinking(message.Content ?? "");
                 _entries.Add(new ChatEntry
@@ -726,6 +757,7 @@ public sealed class ChatPanel : DoubleBufferedPanel
         public bool IsStreaming { get; set; }
         public int ConversationIndex { get; set; } = -1;
         public List<ChatAttachment> Attachments { get; set; } = new();
+        public List<ComparisonColumn> Comparison { get; set; } = new();
 
         public object ToViewModel() => new
         {
@@ -743,8 +775,21 @@ public sealed class ChatPanel : DoubleBufferedPanel
                 kind = attachment.Kind,
                 contentType = attachment.ContentType,
                 url = ChatMediaStorage.GetMediaUrl(attachment.Path)
-            }).Where(attachment => !string.IsNullOrWhiteSpace(attachment.url)).ToArray()
+            }).Where(attachment => !string.IsNullOrWhiteSpace(attachment.url)).ToArray(),
+            comparison = Comparison.Select(column => new
+            {
+                model = column.Model,
+                thinking = column.Thinking,
+                content = column.Content
+            }).ToArray()
         };
+    }
+
+    private sealed class ComparisonColumn
+    {
+        public string Model { get; set; } = "";
+        public string Thinking { get; set; } = "";
+        public string Content { get; set; } = "";
     }
 }
 

@@ -46,7 +46,8 @@
     :root[data-theme="dark"] .media-card{border-color:#414754;background:#22252d;color:#b6bfce}
     :root[data-theme="dark"] .media-card button{border-color:#414754;background:#292d36;color:#c0c6d2}
     @keyframes pulse{50%{box-shadow:0 0 0 5px #5967dc18;opacity:.55}}
-    @media(max-width:700px){.topbar{padding:0 15px}.messages{padding:18px 14px}.actions .optional{display:none}.activity-wrap{padding:0 14px}.message.user .bubble{max-width:88%}}
+    .comparison{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:0 0 18px}.compare-column{min-width:0;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--paper);overflow-wrap:anywhere}.compare-model{display:flex;align-items:center;gap:8px;margin:0 0 10px;color:var(--brand);font-size:12px;font-weight:700}.compare-column .body{color:var(--ink)}.compare-empty{color:var(--subtle);font-size:11px;font-style:italic}
+    @media(max-width:700px){.topbar{padding:0 15px}.messages{padding:18px 14px}.actions .optional{display:none}.activity-wrap{padding:0 14px}.message.user .bubble{max-width:88%}.comparison{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -150,6 +151,14 @@
       }
       function renderEntry(entry, index) {
         if (entry.role === 'system') return '<article class="system ' + esc(entry.systemKind || 'info') + '"><div class="system-card"><strong>' + esc(entry.sender) + '</strong> · ' + esc(entry.time) + ' — ' + markdown(entry.content || '') + '</div></article>';
+        if (entry.role === 'comparison') {
+          const columns = (Array.isArray(entry.comparison) ? entry.comparison : []).map(column => {
+            const thinking = column.thinking ? '<details class="thinking"><summary>Réflexion · cliquer pour afficher</summary><div class="thinking-text">' + markdown(column.thinking) + '</div></details>' : '';
+            const answer = column.content ? markdown(column.content) : '<span class="compare-empty">Aucune réponse reçue.</span>';
+            return '<section class="compare-column"><h3 class="compare-model">' + esc(column.model || 'Modèle') + '</h3>' + thinking + '<div class="body message-content">' + answer + '</div></section>';
+          }).join('');
+          return '<article class="comparison" aria-label="Comparaison des réponses">' + columns + '</article>';
+        }
         const user = entry.role === 'user';
         const sender = user ? 'Vous' : (entry.sender || 'Assistant');
         const avatar = user ? '' : '<div class="avatar" aria-hidden="true">IA</div>';
