@@ -31,6 +31,14 @@ namespace LocalAIApp
         private string _selectedModelPath = "";
         private string _modelsFolder = "";
         private string[] _discoveredModelPaths = Array.Empty<string>();
+        private List<LocalModelInfo> _availableComparisonModels = new();
+        private CheckBox _compareModeCheckBox;
+        private ComboBox _comparisonModelPicker;
+        private int _comparisonGenerationStage;
+        private string _comparisonSecondRequestJson = "";
+        private string _comparisonGroupId = "";
+        private string _comparisonPrimaryModelName = "";
+        private string _comparisonSecondaryModelName = "";
         private System.Threading.CancellationTokenSource? _modelsScanCancellation;
         private bool _isGenerating = false;
         private bool _isStreamingResponse = false;
@@ -162,22 +170,53 @@ namespace LocalAIApp
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 2,
+                RowCount = 3,
                 BackColor = Color.Transparent,
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None
             };
+            chatLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
             chatLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             chatLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 180F));
 
+            var comparisonToolbar = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Padding = new Padding(12, 7, 8, 4),
+                BackColor = Color.Transparent
+            };
+            _compareModeCheckBox = new CheckBox
+            {
+                Text = "Comparer deux modèles",
+                AutoSize = true,
+                ForeColor = ThemeColors.TextSecondary,
+                Font = new Font("Segoe UI", 9f),
+                Margin = new Padding(0, 3, 12, 0)
+            };
+            _compareModeCheckBox.CheckedChanged += (_, _) => UpdateComparisonControls();
+            _comparisonModelPicker = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Width = 300,
+                Enabled = false,
+                Font = new Font("Segoe UI", 9f),
+                DisplayMember = nameof(LocalModelInfo.Name),
+                Margin = new Padding(0)
+            };
+            comparisonToolbar.Controls.Add(_compareModeCheckBox);
+            comparisonToolbar.Controls.Add(_comparisonModelPicker);
+            chatLayout.Controls.Add(comparisonToolbar, 0, 0);
+
             _chatPanel = new ChatPanel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8) };
             _chatPanel.EditMessageRequested += OnEditMessageRequested;
-            chatLayout.Controls.Add(_chatPanel, 0, 0);
+            chatLayout.Controls.Add(_chatPanel, 0, 1);
 
             _inputPanel = new InputPanel { Dock = DockStyle.Fill, Margin = new Padding(0) };
             _inputPanel.SendClicked += OnSendMessage;
             _inputPanel.CancelClicked += OnCancelGeneration;
             _inputPanel.MessageEditCancelled += OnMessageEditCancelled;
-            chatLayout.Controls.Add(_inputPanel, 0, 1);
+            chatLayout.Controls.Add(_inputPanel, 0, 2);
 
             var chatSurface = new RoundedPanel { BackColor = ThemeColors.Surface, Padding = new Padding(0), Dock = DockStyle.Fill };
             chatSurface.Controls.Add(chatLayout);
@@ -542,6 +581,7 @@ namespace LocalAIApp
                             }
 
                             _sidebarPanel.LoadModels(models, preferredModel?.Path);
+                            UpdateComparisonModels(models, preferredModel?.Path);
                             _sidebarPanel.SetModelsLoading(false);
                             var scanLabel = searchAllDrives ? "après la recherche complète" : "dans les emplacements connus";
                             _statusBar.SetStatus(
@@ -877,6 +917,7 @@ namespace LocalAIApp
             _selectedModelPath = modelPath;
             var modelName = GetModelDisplayName(modelPath);
             _selectedModelName = modelName;
+            UpdateComparisonControls();
             _chatPanel.SetModelName(modelName);
             
             _statusBar.SetStatus("Modele selectionne: " + modelName, StatusType.Info);
@@ -890,6 +931,57 @@ namespace LocalAIApp
             return string.Equals(Path.GetExtension(modelPath), ".gguf", StringComparison.OrdinalIgnoreCase)
                 ? Path.GetFileNameWithoutExtension(modelPath)
                 : fileName;
+        }
+
+        private void UpdateComparisonModels(List<LocalModelInfo> models, string? primaryModelPath)
+        {
+            var selectedPath = (_comparisonModelPicker.SelectedItem as LocalModelInfo)?.Path;
+            _availableComparisonModels = models
+                .Where(model => model.Type == ModelType.GGUF && !IsMmprojFile(model.Path))
+                .GroupBy(model => model.Path, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .ToList();
+
+            _comparisonModelPicker.BeginUpdate();
+            try
+            {
+                _comparisonModelPicker.Items.Clear();
+                foreach (var model in _availableComparisonModels)
+                    _comparisonModelPicker.Items.Add(model);
+
+                var selection = _availableComparisonModels.FirstOrDefault(model =>
+                    !string.IsNullOrWhiteSpace(selectedPath) &&
+                    string.Equals(model.Path, selectedPath, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(model.Path, primaryModelPath, StringComparison.OrdinalIgnoreCase));
+                selection ??= _availableComparisonModels.FirstOrDefault(model =>
+                    !string.Equals(model.Path, primaryModelPath, StringComparison.OrdinalIgnoreCase));
+                _comparisonModelPicker.SelectedItem = selection;
+            }
+            finally
+            {
+                _comparisonModelPicker.EndUpdate();
+            }
+
+            UpdateComparisonControls();
+        }
+
+        private void UpdateComparisonControls()
+        {
+            if (_comparisonModelPicker == null)
+                return;
+            var compareEnabled = _compareModeCheckBox?.Checked == true;
+            _compareModeCheckBox.Enabled = !_isGenerating;
+            _comparisonModelPicker.Enabled = compareEnabled && !_isGenerating && _availableComparisonModels.Count > 1;
+            var primary = _selectedModelPath;
+            if (compareEnabled)
+            {
+                var selected = _comparisonModelPicker.SelectedItem as LocalModelInfo;
+                if (selected == null || string.Equals(selected.Path, primary, StringComparison.OrdinalIgnoreCase))
+                {
+                    _comparisonModelPicker.SelectedItem = _availableComparisonModels.FirstOrDefault(model =>
+                        !string.Equals(model.Path, primary, StringComparison.OrdinalIgnoreCase));
+                }
+            }
         }
 
         private void RequestCurrentModelUnload()
@@ -1294,6 +1386,9 @@ namespace LocalAIApp
                                 LogException("Affichage des derniers jetons", flushException);
                             }
 
+                            if (TryStartComparisonSecondGeneration(msg, streamError))
+                                break;
+
                             // A stream_end is terminal even if WebView rendering fails.
                             // Unlock the composer before finalizing the visual message.
                             _isGenerating = false;
@@ -1301,6 +1396,7 @@ namespace LocalAIApp
                             _isCancellingGeneration = false;
                             _generationTimedOut = false;
                             _inputPanel.SetGenerating(false);
+                            UpdateComparisonControls();
                             Log("stream_end received; send controls restored");
                             try {
                                 Log("finalizing streamed message");
@@ -1308,18 +1404,27 @@ namespace LocalAIApp
                                 System.Diagnostics.Debug.WriteLine($"[C# stream_end] EndStreamingMessage done");
                                 Log("stream message finalized");
                                 var streamMedia = ImportGeneratedMedia(msg.Media);
-                                if (!string.IsNullOrWhiteSpace(msg.Content) || streamMedia.Count > 0)
+                                var completedComparisonStage = _comparisonGenerationStage;
+                                if (!string.IsNullOrWhiteSpace(msg.Content) || streamMedia.Count > 0 || completedComparisonStage > 0)
                                 {
                                     _currentConversation.Add(new Message
                                     {
                                         Role = "assistant",
                                         Content = msg.Content ?? "",
                                         Attachments = streamMedia,
-                                        Timestamp = DateTime.Now
+                                        Timestamp = DateTime.Now,
+                                        ComparisonGroupId = completedComparisonStage > 0 ? _comparisonGroupId : "",
+                                        ModelName = completedComparisonStage == 1
+                                            ? _comparisonPrimaryModelName
+                                            : completedComparisonStage == 2 ? _comparisonSecondaryModelName : "",
+                                        IsComparisonSecondary = completedComparisonStage == 2
                                     });
                                     _chatPanel.RenderMessages(_currentConversation);
                                     SaveConversation();
                                 }
+                                _comparisonGenerationStage = 0;
+                                _comparisonSecondRequestJson = "";
+                                _comparisonGroupId = "";
                                 if (!string.IsNullOrWhiteSpace(streamError))
                                 {
                                     var displayedError = AddApplicationLogLocation(streamError);
@@ -1663,6 +1768,19 @@ namespace LocalAIApp
                 return;
             }
             var goalMode = InputPanel.TryStripGoalModePrefix(ref text);
+            var compareEnabled = _compareModeCheckBox?.Checked == true;
+            var comparisonModel = _comparisonModelPicker?.SelectedItem as LocalModelInfo;
+            if (compareEnabled && goalMode)
+            {
+                _statusBar.SetStatus("Désactive goal: pour comparer deux réponses indépendantes.", StatusType.Warning);
+                return;
+            }
+            if (compareEnabled && (comparisonModel == null ||
+                string.Equals(comparisonModel.Path, _selectedModelPath, StringComparison.OrdinalIgnoreCase)))
+            {
+                _statusBar.SetStatus("Choisis un deuxième modèle distinct dans le sélecteur de comparaison.", StatusType.Warning);
+                return;
+            }
             var attachments = _inputPanel.GetAttachments();
             if (string.IsNullOrWhiteSpace(text) && attachments.Count == 0)
             {
@@ -1726,6 +1844,7 @@ namespace LocalAIApp
             System.Threading.Interlocked.Exchange(ref _generationPausedTicks, 0);
             _generationLastProgressTime = DateTime.Now;
             _inputPanel.SetGenerating(true);
+            UpdateComparisonControls();
             _statusBar.SetStatus("Generation en cours...", StatusType.Info);
 
             // Watchdog: stoppe une génération sans aucun progrès pendant trop longtemps.
@@ -1747,6 +1866,7 @@ namespace LocalAIApp
                 // The current message is also sent as `prompt`; do not include it twice in history.
                 history.AddRange(_currentConversation
                     .Take(Math.Max(0, _currentConversation.Count - 1))
+                    .Where(m => !m.IsComparisonSecondary)
                     .Select(m => new
                     {
                         role = m.Role,
@@ -1789,7 +1909,7 @@ namespace LocalAIApp
                     conversation_title_model_path = !_appSettings.UltraLiteMode && _appSettings.UseDedicatedConversationTitleModel
                         ? _appSettings.ConversationTitleModelPath : "",
                     prompt = text, 
-                    goal_mode = goalMode,
+                    goal_mode = goalMode && !compareEnabled,
                     history = history.ToArray(),
                     attachments = attachments.Select(attachment => new
                     {
@@ -1819,13 +1939,13 @@ namespace LocalAIApp
                     use_mmap = _appSettings.UseMmapForModel,
                     reasoning_effort = _appSettings.ReasoningEffort,
                     ultra_lite = _appSettings.UltraLiteMode,
-                    enable_web_access = !_appSettings.UltraLiteMode && _appSettings.EnableWebAccess,
-                    enable_code_execution = !_appSettings.UltraLiteMode && _appSettings.EnableCodeExecution,
-                    enable_system_commands = !_appSettings.UltraLiteMode && _appSettings.EnableSystemCommands,
-                    enable_forum = !_appSettings.UltraLiteMode && _appSettings.EnableForum,
-                    enable_subagents = !_appSettings.UltraLiteMode && _appSettings.EnableSubagents,
-                    available_local_models = _appSettings.UltraLiteMode ? Array.Empty<string>() : GetAvailableLocalModelPaths(),
-                    available_subagent_models = _appSettings.UltraLiteMode ? Array.Empty<string>() : GetAvailableSubagentModelPaths(),
+                    enable_web_access = !compareEnabled && !_appSettings.UltraLiteMode && _appSettings.EnableWebAccess,
+                    enable_code_execution = !compareEnabled && !_appSettings.UltraLiteMode && _appSettings.EnableCodeExecution,
+                    enable_system_commands = !compareEnabled && !_appSettings.UltraLiteMode && _appSettings.EnableSystemCommands,
+                    enable_forum = !compareEnabled && !_appSettings.UltraLiteMode && _appSettings.EnableForum,
+                    enable_subagents = !compareEnabled && !_appSettings.UltraLiteMode && _appSettings.EnableSubagents,
+                    available_local_models = _appSettings.UltraLiteMode || compareEnabled ? Array.Empty<string>() : GetAvailableLocalModelPaths(),
+                    available_subagent_models = _appSettings.UltraLiteMode || compareEnabled ? Array.Empty<string>() : GetAvailableSubagentModelPaths(),
                     code_workspace = _appSettings.UltraLiteMode ? "" : _appSettings.CodeWorkspace,
                     default_image_model_path = _appSettings.UltraLiteMode ? "" : _appSettings.DefaultImageModelPath,
                     default_omni_model_path = _appSettings.UltraLiteMode ? "" : _appSettings.DefaultOmniModelPath,
@@ -1839,6 +1959,25 @@ namespace LocalAIApp
                 };
                 var json = JsonConvert.SerializeObject(request);
                 System.Diagnostics.Debug.WriteLine($"[C# Send] {json}");
+                _comparisonGenerationStage = 0;
+                _comparisonSecondRequestJson = "";
+                _comparisonGroupId = "";
+                if (compareEnabled && comparisonModel != null)
+                {
+                    var secondRequest = JObject.Parse(json);
+                    secondRequest["model_path"] = comparisonModel.Path;
+                    secondRequest["conversation_id"] = JValue.CreateNull();
+                    secondRequest["generate_title"] = false;
+                    secondRequest["title_messages"] = new JArray();
+                    secondRequest["conversation_title_prompt"] = JValue.CreateNull();
+                    secondRequest["conversation_title_model_path"] = "";
+                    _comparisonSecondRequestJson = secondRequest.ToString(Formatting.None);
+                    _comparisonGenerationStage = 1;
+                    _comparisonGroupId = Guid.NewGuid().ToString("N");
+                    _comparisonPrimaryModelName = _selectedModelName;
+                    _comparisonSecondaryModelName = comparisonModel.Name;
+                    _statusBar.SetStatus("Comparaison en cours · 1/2", StatusType.Info);
+                }
                 
                 // Preserve request order so an immediate cancellation follows
                 // the generation request instead of reaching Python first.
@@ -1853,6 +1992,9 @@ namespace LocalAIApp
                         _isGenerating = false;
                         _isStreamingResponse = false;
                         _isCancellingGeneration = false;
+                        _comparisonGenerationStage = 0;
+                        _comparisonSecondRequestJson = "";
+                        UpdateComparisonControls();
                         if (shouldGenerateConversationTitle)
                             ForgetPendingConversationTitle(conversationId);
                         _inputPanel.SetGenerating(false);
@@ -1869,6 +2011,7 @@ namespace LocalAIApp
                 if (shouldGenerateConversationTitle)
                     ForgetPendingConversationTitle(conversationId);
                 _inputPanel.SetGenerating(false);
+                UpdateComparisonControls();
                 _statusBar.SetStatus("Erreur: " + ex.Message, StatusType.Error);
             }
         }
@@ -1876,6 +2019,71 @@ namespace LocalAIApp
         private void OnCancelGeneration(object sender, EventArgs e)
         {
             CancelGeneration(false);
+        }
+
+        private bool TryStartComparisonSecondGeneration(PythonMessage message, string? streamError)
+        {
+            if (_comparisonGenerationStage != 1 ||
+                message.Cancelled ||
+                _generationTimedOut ||
+                !string.IsNullOrWhiteSpace(streamError) ||
+                string.IsNullOrWhiteSpace(_comparisonSecondRequestJson))
+                return false;
+
+            try
+            {
+                var content = message.Content ?? "";
+                _chatPanel.EndStreamingMessage(content);
+                _currentConversation.Add(new Message
+                {
+                    Role = "assistant",
+                    Content = content,
+                    Timestamp = DateTime.Now,
+                    ComparisonGroupId = _comparisonGroupId,
+                    ModelName = _comparisonPrimaryModelName
+                });
+                SaveConversation();
+
+                _comparisonGenerationStage = 2;
+                _isStreamingResponse = false;
+                _generationLastProgressTime = DateTime.Now;
+                _generationWatchdog?.Dispose();
+                _generationWatchdog = new System.Threading.Timer(
+                    GenerationWatchdogCallback,
+                    null,
+                    TimeSpan.FromSeconds(GenerationTimeoutSeconds),
+                    Timeout.InfiniteTimeSpan);
+                _statusBar.SetStatus("Comparaison en cours · 2/2 : " + _comparisonSecondaryModelName, StatusType.Info);
+
+                var secondRequest = _comparisonSecondRequestJson;
+                _comparisonSecondRequestJson = "";
+                QueuePythonBackendWrite(secondRequest, exception =>
+                {
+                    if (exception == null || IsDisposed || Disposing || !IsHandleCreated)
+                        return;
+                    BeginInvoke(new Action(() =>
+                    {
+                        _generationWatchdog?.Dispose();
+                        _isGenerating = false;
+                        _isStreamingResponse = false;
+                        _isCancellingGeneration = false;
+                        _comparisonGenerationStage = 0;
+                        _comparisonGroupId = "";
+                        _inputPanel.SetGenerating(false);
+                        UpdateComparisonControls();
+                        _statusBar.SetStatus("Envoi du second modèle impossible : " + exception.Message, StatusType.Error);
+                        _chatPanel.AddSystemMessage("Le deuxième modèle n’a pas pu démarrer.", MessageType.Error);
+                        _chatPanel.RenderMessages(_currentConversation);
+                        SaveConversation();
+                    }));
+                });
+                return true;
+            }
+            catch (Exception exception)
+            {
+                LogException("Démarrage de la seconde réponse", exception);
+                return false;
+            }
         }
 
         private void CancelGeneration(bool timedOut)
@@ -3127,6 +3335,9 @@ namespace LocalAIApp
         public string Content { get; set; }
         public DateTime Timestamp { get; set; }
         public List<ChatAttachment> Attachments { get; set; } = new();
+        public string ComparisonGroupId { get; set; } = "";
+        public string ModelName { get; set; } = "";
+        public bool IsComparisonSecondary { get; set; }
     }
 
     public class ConversationData
