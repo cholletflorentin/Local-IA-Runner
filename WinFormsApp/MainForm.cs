@@ -16,7 +16,7 @@ using Newtonsoft.Json.Linq;
 
 namespace LocalAIApp
 {
-    public partial class MainForm : Form
+    public partial class MainForm : Form, IMessageFilter
     {
         private Process _pythonProcess;
         private StreamWriter _pythonInput;
@@ -84,6 +84,7 @@ namespace LocalAIApp
         {
             EnableHighDpiAwareness();
             InitializeComponent();
+            Application.AddMessageFilter(this);
             _streamRenderTimer = new System.Windows.Forms.Timer { Interval = 33 };
             _streamRenderTimer.Tick += (s, e) =>
             {
@@ -170,7 +171,6 @@ namespace LocalAIApp
 
             _chatPanel = new ChatPanel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8) };
             _chatPanel.EditMessageRequested += OnEditMessageRequested;
-            _chatPanel.ApplicationShortcutHandler = RouteChatShortcut;
             chatLayout.Controls.Add(_chatPanel, 0, 0);
 
             _inputPanel = new InputPanel { Dock = DockStyle.Fill, Margin = new Padding(0) };
@@ -2051,8 +2051,15 @@ namespace LocalAIApp
             }
         }
 
-        private bool RouteChatShortcut(Keys keyData)
+        public bool PreFilterMessage(ref Message message)
         {
+            if (message.Msg is not (0x0100 or 0x0104) || !_chatPanel.ContainsFocus)
+                return false;
+            if ((message.LParam.ToInt64() & (1L << 30)) != 0)
+                return false;
+
+            var keyData = (Keys)message.WParam.ToInt32() |
+                          (Control.ModifierKeys & Keys.Modifiers);
             var item = FindShortcutItem(_menuStrip.Items, keyData);
             if (item == null || !item.Enabled)
                 return false;
@@ -2933,6 +2940,7 @@ namespace LocalAIApp
             }
 
             SaveConversation();
+            Application.RemoveMessageFilter(this);
             var activeModelScan = System.Threading.Interlocked.Exchange(ref _modelsScanCancellation, null);
             activeModelScan?.Cancel();
             _generationWatchdog?.Dispose();
