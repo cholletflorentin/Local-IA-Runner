@@ -192,8 +192,20 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath 'latest-release.json' -Encoding utf8
 
-          gh release upload $tag 'latest-release.json' --clobber --repo $env:GITHUB_REPOSITORY
-          if ($LASTEXITCODE -ne 0) { throw "Unable to upload the latest-release manifest." }
+          $releaseDetailsOutput = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "Unable to inspect release assets before replacing the manifest: $($releaseDetailsOutput | Out-String)" }
+          $releaseDetails = $releaseDetailsOutput | Out-String | ConvertFrom-Json
+          $existingManifestAssets = @($releaseDetails.assets | Where-Object { $_.name -eq 'latest-release.json' })
+          foreach ($existingManifestAsset in $existingManifestAssets) {
+            $deleteOutput = gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/releases/assets/$($existingManifestAsset.id)" 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "Unable to remove the previous latest-release manifest: $($deleteOutput | Out-String)" }
+          }
+
+          $manifestUploadOutput = gh release upload $tag 'latest-release.json' --repo $env:GITHUB_REPOSITORY 2>&1
+          $manifestUploadExitCode = $LASTEXITCODE
+          if ($manifestUploadExitCode -ne 0) {
+            throw "Unable to upload the latest-release manifest: $($manifestUploadOutput | Out-String)"
+          }
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
