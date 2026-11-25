@@ -146,8 +146,16 @@ jobs:
             throw "GitHub release creation failed (gh exit code $publishExitCode)."
           }
 
-          $publishOutput = gh release upload $tag $installer $portable --clobber --repo $env:GITHUB_REPOSITORY 2>&1
-          $publishExitCode = $LASTEXITCODE
+          $publishExitCode = 1
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            $publishOutput = gh release upload $tag $installer $portable --clobber --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+            if ($publishExitCode -eq 0) { break }
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::warning title=GitHub release asset retry::Attempt $attempt/5: " + $detailsLine)
+            if ($attempt -lt 5) { Start-Sleep -Seconds ([Math]::Min(15 * $attempt, 60)) }
+          }
           if ($publishExitCode -ne 0) {
             $publishDetails = $publishOutput | Out-String
             $detailsLine = [string](@($publishOutput)[0])
