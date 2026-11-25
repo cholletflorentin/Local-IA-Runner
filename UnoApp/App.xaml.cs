@@ -17,6 +17,9 @@ public sealed partial class App : Application
         {
             Content = new MainPage()
         };
+#if !ANDROID
+        _window.Closed += (_, _) => DesktopLlamaEngine.Stop();
+#endif
         _window.Activate();
     }
 }

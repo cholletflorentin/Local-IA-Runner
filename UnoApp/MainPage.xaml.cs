@@ -33,6 +33,8 @@ public sealed partial class MainPage : Page
         ModelPicker.ItemsSource = _models;
 #if ANDROID
         AndroidModelPanel.Visibility = Visibility.Visible;
+#else
+        DesktopModelPanel.Visibility = Visibility.Visible;
 #endif
         Loaded += OnLoaded;
     }
@@ -69,10 +71,11 @@ public sealed partial class MainPage : Page
                     ? _state.LocalModelName
                     : Path.GetFileName(_state.LocalModelPath));
             SetStatus(string.IsNullOrWhiteSpace(_state.LocalModelPath)
-                ? "Choisis un modèle GGUF sur l’appareil; llama.cpp démarrera automatiquement au premier message."
-                : "Modèle prêt. llama.cpp démarrera automatiquement au premier message.");
+                ? "Choisis un modèle GGUF sur l’appareil; Actualiser ou le premier message démarrera llama.cpp."
+                : "Modèle prêt. Actualiser ou le premier message démarrera llama.cpp.");
 #else
-            StatusText.Text = "Serveur local compatible llama.cpp prêt à configurer.";
+            LocalModelPathBox.Text = _state.LocalModelPath;
+            StatusText.Text = "Choisis un fichier GGUF local, puis clique sur Actualiser pour démarrer llama.cpp.";
 #endif
             if (Conversations.Count > 0)
                 ConversationList.SelectedItem = Conversations[0];
@@ -137,18 +140,17 @@ public sealed partial class MainPage : Page
 
     private async void OnConnectClick(object sender, RoutedEventArgs e)
     {
+        if (_generationCts is not null || _isPreparingRequest)
+        {
+            SetStatus("Attends la fin de la génération avant de changer de serveur.");
+            return;
+        }
+
         try
         {
             SaveConnectionSettings();
             ValidateEndpoint();
             await SaveStateAsync();
-#if ANDROID
-            if (LocalLlamaEndpointIsSelected() && !string.IsNullOrWhiteSpace(_state.LocalModelPath))
-            {
-                SetStatus("Modèle prêt. llama.cpp démarrera au premier message.");
-                return;
-            }
-#endif
             await RefreshModelsAsync();
         }
         catch (Exception ex)
@@ -159,13 +161,11 @@ public sealed partial class MainPage : Page
 
     private async void OnRefreshModelsClick(object sender, RoutedEventArgs e)
     {
-#if ANDROID
-        if (LocalLlamaEndpointIsSelected() && !string.IsNullOrWhiteSpace(_state.LocalModelPath))
+        if (_generationCts is not null || _isPreparingRequest)
         {
-            SetStatus("llama.cpp démarrera automatiquement quand tu enverras un message.");
+            SetStatus("Attends la fin de la génération avant de redémarrer le serveur.");
             return;
         }
-#endif
         await RefreshModelsAsync();
     }
 
@@ -174,7 +174,12 @@ public sealed partial class MainPage : Page
         try
         {
             SaveConnectionSettings();
+            SaveSelectedLocalModelPath();
             ValidateEndpoint();
+            if (LocalLlamaEndpointIsSelected() && !string.IsNullOrWhiteSpace(_state.LocalModelPath))
+                SetStatus("Démarrage du serveur llama.cpp et chargement du modèle… Cela peut prendre un moment.");
+            await EnsureLocalEngineAsync();
+            await SaveStateAsync();
             using var request = new HttpRequestMessage(HttpMethod.Get, BuildApiUrl("models"));
             AddAuthorization(request);
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
@@ -230,7 +235,7 @@ public sealed partial class MainPage : Page
             ModelPicker.SelectedIndex = -1;
             LocalModelText.Text = "Modèle : " + imported.DisplayName;
             await SaveStateAsync();
-            SetStatus("Modèle choisi. llama.cpp démarrera automatiquement au premier message.");
+            SetStatus("Modèle choisi. Clique sur Actualiser ou envoie un message pour démarrer llama.cpp.");
         }
         catch (Exception ex)
         {
@@ -242,6 +247,59 @@ public sealed partial class MainPage : Page
         }
 #else
         SetStatus("Le choix d’un modèle local est disponible dans l’APK Android.");
+#endif
+    }
+
+    private async void OnSetLocalModelPathClick(object sender, RoutedEventArgs e)
+    {
+#if ANDROID
+        SetStatus("Sur Android, utilise le bouton Choisir un modèle GGUF.");
+#else
+        if (_generationCts is not null || _isPreparingRequest)
+        {
+            SetStatus("Attends la fin de la génération avant de changer de modèle.");
+            return;
+        }
+
+        try
+        {
+            var path = (LocalModelPathBox.Text ?? "").Trim().Trim('"');
+            if (path.Length == 0)
+            {
+                var previousPath = _state.LocalModelPath;
+                _state.LocalModelPath = "";
+                _state.LocalModelName = "";
+                await DesktopLlamaEngine.StopAsync();
+                if (!string.Equals(previousPath, path, StringComparison.OrdinalIgnoreCase))
+                    _models.Clear();
+                await SaveStateAsync();
+                SetStatus("Aucun modèle local choisi. Actualiser utilisera le serveur indiqué ci-dessus.");
+                return;
+            }
+
+            if (!path.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Le fichier choisi doit avoir l’extension .gguf.");
+            if (!File.Exists(path))
+                throw new FileNotFoundException("Le fichier GGUF n’existe pas. Vérifie son chemin complet.", path);
+
+            path = Path.GetFullPath(path);
+            var oldPath = _state.LocalModelPath;
+            if (!string.Equals(oldPath, path, StringComparison.OrdinalIgnoreCase))
+            {
+                await DesktopLlamaEngine.StopAsync();
+                _models.Clear();
+                ModelPicker.SelectedIndex = -1;
+            }
+            _state.LocalModelPath = path;
+            _state.LocalModelName = Path.GetFileName(path);
+            LocalModelPathBox.Text = path;
+            await SaveStateAsync();
+            SetStatus($"Modèle sélectionné : {_state.LocalModelName}. Clique sur Actualiser pour démarrer llama.cpp.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Sélection du modèle impossible : " + ex.Message);
+        }
 #endif
     }
 
@@ -264,12 +322,10 @@ public sealed partial class MainPage : Page
         try
         {
             SaveConnectionSettings();
+            SaveSelectedLocalModelPath();
             ValidateEndpoint();
-#if ANDROID
             if (LocalLlamaEndpointIsSelected() && !string.IsNullOrWhiteSpace(_state.LocalModelPath))
             {
-                SetStatus("Démarrage de llama.cpp et chargement du modèle… Cela peut prendre un moment.");
-                await EnsureAndroidLocalEngineAsync();
                 if (!await RefreshModelsAsync() || _models.Count == 0)
                     return;
             }
@@ -277,16 +333,15 @@ public sealed partial class MainPage : Page
             {
                 await RefreshModelsAsync();
             }
-#endif
             if (_models.Count == 0)
             {
-#if ANDROID
                 SetStatus(LocalLlamaEndpointIsSelected()
-                    ? "Choisis un modèle GGUF local pour démarrer llama.cpp au premier message, ou connecte-toi à un serveur."
-                    : "Connecte-toi à un serveur et actualise la liste des modèles.");
+#if ANDROID
+                    ? "Choisis un modèle GGUF local pour démarrer llama.cpp, ou connecte-toi à un serveur."
 #else
-                SetStatus("Connecte-toi d’abord à un serveur et actualise la liste des modèles.");
+                    ? "Choisis un modèle GGUF local et clique sur Actualiser, ou connecte-toi à un serveur."
 #endif
+                    : "Connecte-toi à un serveur et actualise la liste des modèles.");
                 return;
             }
             await SaveStateAsync();
@@ -406,10 +461,38 @@ public sealed partial class MainPage : Page
 
     private void OnCancelClick(object sender, RoutedEventArgs e) => _generationCts?.Cancel();
 
-#if ANDROID
     private bool LocalLlamaEndpointIsSelected() =>
+#if ANDROID
         LocalIARunner.Uno.Droid.AndroidLlamaEngine.IsLoopbackEndpoint(_state.Endpoint);
+#else
+        Uri.TryCreate(_state.Endpoint, UriKind.Absolute, out var uri)
+        && uri.Scheme == Uri.UriSchemeHttp
+        && uri.IsLoopback;
+#endif
 
+    private async Task EnsureLocalEngineAsync()
+    {
+        if (!LocalLlamaEndpointIsSelected() || string.IsNullOrWhiteSpace(_state.LocalModelPath))
+        {
+#if ANDROID
+            LocalIARunner.Uno.Droid.AndroidLlamaEngine.Stop();
+#else
+            await DesktopLlamaEngine.StopAsync();
+#endif
+            return;
+        }
+
+#if ANDROID
+        await EnsureAndroidLocalEngineAsync();
+#else
+        await DesktopLlamaEngine.EnsureStartedAsync(
+            _state.LocalModelPath,
+            _state.Endpoint,
+            ApiKeyBox.Password.Trim());
+#endif
+    }
+
+#if ANDROID
     private async Task EnsureAndroidLocalEngineAsync()
     {
         if (string.IsNullOrWhiteSpace(_state.LocalModelPath) || !File.Exists(_state.LocalModelPath))
@@ -421,6 +504,16 @@ public sealed partial class MainPage : Page
             ApiKeyBox.Password.Trim());
     }
 #endif
+
+    private void SaveSelectedLocalModelPath()
+    {
+#if !ANDROID
+        _state.LocalModelPath = (LocalModelPathBox.Text ?? "").Trim().Trim('"');
+        _state.LocalModelName = string.IsNullOrWhiteSpace(_state.LocalModelPath)
+            ? ""
+            : Path.GetFileName(_state.LocalModelPath);
+#endif
+    }
 
     private void SaveConnectionSettings()
     {

@@ -24,6 +24,13 @@
                 <Button x:Name="ChooseModelButton" Content="Choisir un modèle GGUF" Click="OnChooseLocalModelClick" />
                 <TextBlock x:Name="LocalModelText" Grid.Column="1" Text="Aucun modèle GGUF choisi" VerticalAlignment="Center" Foreground="#AAB4C1" TextTrimming="CharacterEllipsis" />
             </Grid>
+            <StackPanel x:Name="DesktopModelPanel" Spacing="6" Visibility="Collapsed">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <TextBox x:Name="LocalModelPathBox" PlaceholderText="Chemin complet vers un modèle GGUF local (facultatif)" />
+                    <Button x:Name="SetLocalModelButton" Grid.Column="1" Content="Choisir ce GGUF" Click="OnSetLocalModelPathClick" />
+                </Grid>
+                <TextBlock Text="Sur Windows, Linux et macOS, choisis un fichier .gguf puis clique sur Actualiser pour démarrer le serveur local." Foreground="#9AA4B2" FontSize="12" TextWrapping="Wrap" />
+            </StackPanel>
             <ComboBox x:Name="MobileConversationPicker" PlaceholderText="Choisir une discussion" ItemsSource="{x:Bind Conversations}" SelectionChanged="OnMobileConversationSelectionChanged" Visibility="Collapsed">
                 <ComboBox.ItemTemplate>
                     <DataTemplate>

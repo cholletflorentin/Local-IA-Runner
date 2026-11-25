@@ -12,20 +12,20 @@ Cette application Uno est ajoutée à côté de l'application WinForms. Le code 
 - L'APK Android inclut llama.cpp b12676 ARM64 et démarre son serveur local au premier message après le choix d'un modèle GGUF.
 - Les notices de licence sont incluses dans chaque archive desktop et dans l'APK.
 
-L'application Uno reste un client : elle ne charge pas directement les modèles et ne démarre pas le moteur toute seule. Sur Windows, Linux et macOS, utilise `run-llama-server.cmd` ou `sh ./run-llama-server.sh` depuis le dossier de l'archive, en passant le chemin d'un modèle GGUF. Exemple :
+Sur Windows, Linux et macOS, saisis le chemin complet d'un modèle `.gguf` dans l'application puis clique sur **Choisir ce GGUF**. Le bouton **Actualiser** démarre le `llama-server` CPU inclus dans l'archive et attend que le modèle soit prêt. Le chemin du modèle reste enregistré dans l'application; le modèle lui-même n'est pas copié. Les lanceurs `run-llama-server.cmd` et `run-llama-server.sh` restent disponibles pour un démarrage manuel. Exemple :
 
 ```text
 Windows : run-llama-server.cmd -m "C:\ia\text\modele.gguf" --host 127.0.0.1 --port 8080
 Linux/macOS : sh ./run-llama-server.sh -m "/chemin/vers/modele.gguf" --host 127.0.0.1 --port 8080
 ```
 
-Configure ensuite `http://127.0.0.1:8080` dans l'application desktop. Sur Android, choisis un fichier GGUF avec le bouton **Choisir un modèle GGUF**. L'application le copie dans son espace privé; llama.cpp est extrait de l'APK puis démarre automatiquement lors du premier message envoyé à localhost. Le premier démarrage peut prendre plusieurs minutes pendant que le modèle se charge. Le fichier GGUF n'est pas inclus dans l'APK et demande suffisamment d'espace disque et de mémoire. Cette version du moteur fonctionne sur les appareils Android ARM64. Tu peux toujours saisir l'adresse d'un autre serveur llama.cpp pour utiliser un serveur distant. L'application Uno ne reprend pas encore stable-diffusion.cpp, les outils, le forum, les sous-agents ni les autres fonctions propres au backend WinForms.
+Utilise ensuite `http://127.0.0.1:8080` dans l'application desktop (c'est l'adresse par défaut). Sur Android, choisis un fichier GGUF avec le bouton **Choisir un modèle GGUF**. L'application le copie dans son espace privé; llama.cpp est extrait de l'APK puis démarre lorsque tu cliques sur **Actualiser** ou envoies le premier message à localhost. Le premier démarrage peut prendre plusieurs minutes pendant que le modèle se charge. Le fichier GGUF n'est pas inclus dans l'APK et demande suffisamment d'espace disque et de mémoire. Cette version du moteur fonctionne sur les appareils Android ARM64. Tu peux toujours saisir l'adresse d'un autre serveur llama.cpp pour utiliser un serveur distant. L'application Uno ne reprend pas encore stable-diffusion.cpp, les outils, le forum, les sous-agents ni les autres fonctions propres au backend WinForms.
 
 Les conversations sont enregistrées localement dans le dossier de données de l'application. La clé API reste seulement en mémoire pendant l'exécution et n'est pas enregistrée.
 
 ## Démarrage
 
-Sur Windows, Linux et macOS, lance llama.cpp avec un modèle GGUF, saisis son adresse dans l'application et appuie sur **Enregistrer et connecter**. Sur Android, choisis d'abord le GGUF sur le téléphone; l'application lance llama.cpp automatiquement à l'envoi de la première requête. La liste des modèles est ensuite chargée depuis `/v1/models`.
+Sur Windows, Linux et macOS, saisis le chemin complet d'un modèle GGUF, clique sur **Choisir ce GGUF**, puis sur **Actualiser**. L'application lance le moteur inclus et charge la liste des modèles depuis `/v1/models`. Sur Android, choisis d'abord le GGUF sur le téléphone; **Actualiser** ou le premier message démarre llama.cpp. Pour utiliser un serveur distant, renseigne son URL et clique sur **Enregistrer et connecter** ou **Actualiser**.
 
 Sur Android, `127.0.0.1` désigne le téléphone lui-même. Pour joindre un serveur sur un autre ordinateur, indique son adresse IP locale et configure llama.cpp pour accepter les connexions du réseau local. L'application n'accepte HTTP que pour localhost et les adresses privées; les adresses publiques doivent utiliser HTTPS. N'expose pas un serveur sans authentification sur un réseau public.
 
@@ -36,7 +36,7 @@ Télécharge les paquets depuis la dernière préversion GitHub intitulée **Loc
 - **Windows** : extrais `LocalIARunner-Uno-Windows-x64.zip`, puis lance `LocalIARunner.Uno.exe`.
 - **Linux** : extrais `LocalIARunner-Uno-Linux-x64.zip`, puis lance `./LocalIARunner.Uno` depuis le dossier extrait. Si nécessaire, rends le fichier exécutable avec `chmod +x ./LocalIARunner.Uno`.
 - **macOS** : extrais l'archive correspondant au processeur (`macOS-x64` pour Intel ou `macOS-arm64` pour Apple Silicon), puis lance `./LocalIARunner.Uno` depuis Terminal. Cette bêta n'est pas signée ni notarisée.
-- **Android** : télécharge `LocalIARunner-Uno-Android.apk`, ouvre-le sur le téléphone et confirme l'installation depuis ta source de téléchargement. Au premier lancement, choisis un modèle GGUF; il sera copié dans l'espace privé de l'application. Envoie un message pour que llama.cpp se lance et charge le modèle. L'APK ne contient pas le modèle GGUF; prévois l'espace disque nécessaire.
+- **Android** : télécharge `LocalIARunner-Uno-Android.apk`, ouvre-le sur le téléphone et confirme l'installation depuis ta source de téléchargement. Au premier lancement, choisis un modèle GGUF; il sera copié dans l'espace privé de l'application. Clique sur **Actualiser** ou envoie un message pour que llama.cpp se lance et charge le modèle. L'APK ne contient pas le modèle GGUF; prévois l'espace disque nécessaire.
 
 L'APK est signé avec une clé temporaire de compilation; désinstalle une bêta précédente avant d'installer la suivante.
 

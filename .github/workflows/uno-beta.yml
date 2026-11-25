@@ -215,14 +215,14 @@ jobs:
           Version mise à jour de l'application multi-plateforme Uno, publiée séparément de la version WinForms stable.
 
           ### Téléchargements
-          - Windows x64, Linux x64 et macOS x64/ARM64 : archives portables de l'interface Uno avec llama.cpp b12676 CPU et un lanceur.
+          - Windows x64, Linux x64 et macOS x64/ARM64 : archives portables de l'interface Uno avec llama.cpp b12676 CPU, démarré par le bouton Actualiser après sélection d'un fichier GGUF.
           - Android : APK de test avec l'archive llama.cpp b12676 pour Android ARM64 intégrée.
 
           ### Correctifs
           - Android : le thème de l'activité hérite maintenant d'AppCompat, comme l'exige Uno Platform.
 
           ### À savoir
-          Sur Windows, Linux et macOS, les archives incluent llama.cpp et `run-llama-server.cmd` ou `run-llama-server.sh`; il faut lancer le serveur avec un GGUF séparé. Sur Android, choisis un GGUF dans l'application : llama-server b12676 ARM64 s'extrait de l'APK et démarre automatiquement au premier message, puis reste actif tant que l'application est ouverte. Le GGUF n'est pas inclus dans l'APK et est copié dans l'espace privé de l'application. L'intégration du backend Python, de stable-diffusion.cpp, des outils, du forum, des sous-agents et des réglages avancés n'est pas encore portée dans l'application Uno. L'APK de test est signé avec une clé temporaire; il faut désinstaller l'ancienne bêta Android avant d'installer celle-ci.
+          Sur Windows, Linux et macOS, saisis le chemin complet d'un GGUF et clique sur Actualiser : l'application démarre le serveur inclus, puis charge la liste des modèles. Les scripts `run-llama-server.cmd` et `run-llama-server.sh` restent disponibles pour un démarrage manuel. Sur Android, choisis un GGUF dans l'application : llama-server b12676 ARM64 s'extrait de l'APK et démarre au clic sur Actualiser ou au premier message, puis reste actif tant que l'application est ouverte. Le GGUF n'est pas inclus dans l'APK et est copié dans l'espace privé de l'application. L'intégration du backend Python, de stable-diffusion.cpp, des outils, du forum, des sous-agents et des réglages avancés n'est pas encore portée dans l'application Uno. L'APK de test est signé avec une clé temporaire; il faut désinstaller l'ancienne bêta Android avant d'installer celle-ci.
           NOTES
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$tag" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
