@@ -2,27 +2,11 @@
 
 ```text
 dotnet publish a échoué avec le code 1
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(1,48): error CS1001: Identifier expected [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(1,48): error CS1026: ) expected [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(1,48): error CS1002: ; expected [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(1,48): error CS1022: Type or namespace definition, or end-of-file expected [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(1,54): error CS1002: ; expected [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(1,54): error CS1022: Type or namespace definition, or end-of-file expected [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(2,14): error CS1003: Syntax error, ',' expected [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(2,19): error CS1002: ; expected [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(2,19): error CS1022: Type or namespace definition, or end-of-file expected [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(2,24): error CS1002: ; expected [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(4,1): error CS1529: A using clause must precede all other elements defined in the namespace except extern alias declarations [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(5,1): error CS1529: A using clause must precede all other elements defined in the namespace except extern alias declarations [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(6,1): error CS1529: A using clause must precede all other elements defined in the namespace except extern alias declarations [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(7,1): error CS1529: A using clause must precede all other elements defined in the namespace except extern alias declarations [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(8,1): error CS1529: A using clause must precede all other elements defined in the namespace except extern alias declarations [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(156,45): error CS1002: ; expected [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(156,45): error CS1056: Unexpected character '…' [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(156,51): error CS1002: ; expected [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(156,67): error CS1056: Unexpected character '…' [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\SubagentActivityForm.cs(169,10): error CS1513: } expected [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
+D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\HtmlChatPanel.cs(354,22): error CS1061: 'WebView2' does not contain a definition for 'CoreWebView2Controller' and no accessible extension method 'CoreWebView2Controller' accepting a first argument of type 'WebView2' could be found (are you missing a using directive or an assembly reference?) [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
+D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\MainForm.cs(3154,23): warning CS8618: Non-nullable property 'Error' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the property as nullable. [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
+D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\MainForm.cs(3157,23): warning CS8618: Non-nullable property 'Errors' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the property as nullable. [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
+D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\HtmlChatPanel.cs(35,30): error WFO1000: Property 'ApplicationShortcutHandler' does not configure the code serialization for its property content (https://aka.ms/winforms-warnings/wfo1000) [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
 at <ScriptBlock>, D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\Installer\build-installer.ps1: line 68
-at <ScriptBlock>, D:\a\_temp\db02619c-2207-49b2-9868-b3c47ae87cdb.ps1: line 12
+at <ScriptBlock>, D:\a\_temp\381c860d-2dcf-4eb8-96af-43c391af4ac5.ps1: line 12
 at <ScriptBlock>, <No file>: line 1
 ```
