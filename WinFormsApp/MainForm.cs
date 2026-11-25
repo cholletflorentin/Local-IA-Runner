@@ -173,11 +173,10 @@ namespace LocalAIApp
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 3,
+                RowCount = 2,
                 BackColor = Color.Transparent,
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.None
             };
-            chatLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
             chatLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             chatLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 180F));
 
@@ -209,17 +208,16 @@ namespace LocalAIApp
             };
             comparisonToolbar.Controls.Add(_compareModeCheckBox);
             comparisonToolbar.Controls.Add(_comparisonModelPicker);
-            chatLayout.Controls.Add(comparisonToolbar, 0, 0);
 
             _chatPanel = new ChatPanel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8) };
             _chatPanel.EditMessageRequested += OnEditMessageRequested;
-            chatLayout.Controls.Add(_chatPanel, 0, 1);
+            chatLayout.Controls.Add(_chatPanel, 0, 0);
 
             _inputPanel = new InputPanel { Dock = DockStyle.Fill, Margin = new Padding(0) };
             _inputPanel.SendClicked += OnSendMessage;
             _inputPanel.CancelClicked += OnCancelGeneration;
             _inputPanel.MessageEditCancelled += OnMessageEditCancelled;
-            chatLayout.Controls.Add(_inputPanel, 0, 2);
+            chatLayout.Controls.Add(_inputPanel, 0, 1);
 
             var chatSurface = new RoundedPanel { BackColor = ThemeColors.Surface, Padding = new Padding(0), Dock = DockStyle.Fill };
             chatSurface.Controls.Add(chatLayout);
