@@ -2051,7 +2051,7 @@ namespace LocalAIApp
             }
         }
 
-        public bool PreFilterMessage(ref Message message)
+        public bool PreFilterMessage(ref System.Windows.Forms.Message message)
         {
             if (message.Msg is not (0x0100 or 0x0104) || !_chatPanel.ContainsFocus)
                 return false;
