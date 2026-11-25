@@ -39,6 +39,9 @@ namespace LocalAIApp
         private string _comparisonGroupId = "";
         private string _comparisonPrimaryModelName = "";
         private string _comparisonSecondaryModelName = "";
+        private ModelComparisonForm? _modelComparisonForm;
+        private volatile int _toolComparisonGenerationStage;
+        private string _toolComparisonSecondRequestJson = "";
         private System.Threading.CancellationTokenSource? _modelsScanCancellation;
         private bool _isGenerating = false;
         private bool _isStreamingResponse = false;
@@ -242,6 +245,7 @@ namespace LocalAIApp
             _menuStrip.ImageGeneratorClicked += OnOpenImageGenerator;
             _menuStrip.ForumClicked += OnOpenForum;
             _menuStrip.SubagentActivityClicked += OnOpenSubagentActivity;
+            _menuStrip.CompareModelsClicked += OnOpenModelComparison;
             _menuStrip.CheckForUpdatesClicked += OnCheckForUpdates;
             _menuStrip.ExitClicked += (s, e) => Application.Exit();
             this.Controls.Add(_menuStrip);
@@ -285,6 +289,8 @@ namespace LocalAIApp
                 ThemeColors.ApplyToControlTree(_forumForm);
             if (_subagentActivityForm != null && !_subagentActivityForm.IsDisposed)
                 ThemeColors.ApplyToControlTree(_subagentActivityForm);
+            if (_modelComparisonForm != null && !_modelComparisonForm.IsDisposed)
+                ThemeColors.ApplyToControlTree(_modelComparisonForm);
         }
 
         private void LoadSavedModelsFolder()
@@ -963,6 +969,8 @@ namespace LocalAIApp
             }
 
             UpdateComparisonControls();
+            if (_modelComparisonForm != null && !_modelComparisonForm.IsDisposed)
+                _modelComparisonForm.SetModels(_availableComparisonModels, primaryModelPath);
         }
 
         private void UpdateComparisonControls()
@@ -1228,7 +1236,14 @@ namespace LocalAIApp
                 if (tokenMessage?.Type == "stream_token")
                 {
                     if (!string.IsNullOrEmpty(tokenMessage.Content))
-                        QueueStreamingToken(tokenMessage.Content);
+                    {
+                        MarkGenerationProgress();
+                        var toolComparisonStage = _toolComparisonGenerationStage;
+                        if (toolComparisonStage > 0)
+                            _modelComparisonForm?.AppendToken(toolComparisonStage, tokenMessage.Content);
+                        else
+                            QueueStreamingToken(tokenMessage.Content);
+                    }
                     return;
                 }
             }
@@ -1317,8 +1332,13 @@ namespace LocalAIApp
                             MarkGenerationProgress();
                             var toolStatus = msg.Content ?? "Utilisation d'un outil...";
                             _statusBar.SetStatus(toolStatus, StatusType.Info);
-                            _chatPanel.AddToolStatusMessage(toolStatus);
-                            _chatPanel.AppendToolStatusToThinking(toolStatus);
+                            if (_toolComparisonGenerationStage > 0)
+                                _modelComparisonForm?.SetStage(_toolComparisonGenerationStage, toolStatus);
+                            else
+                            {
+                                _chatPanel.AddToolStatusMessage(toolStatus);
+                                _chatPanel.AppendToolStatusToThinking(toolStatus);
+                            }
                             break;
                         }
                         case "subagent_activity":
@@ -1333,7 +1353,7 @@ namespace LocalAIApp
                             break;
                         case "thinking_token":
                             MarkGenerationProgress();
-                            if (!string.IsNullOrEmpty(msg.Content))
+                            if (_toolComparisonGenerationStage == 0 && !string.IsNullOrEmpty(msg.Content))
                             {
                                 if (string.Equals(msg.Source, "conversation_title", StringComparison.Ordinal))
                                     _chatPanel.ShowThinkingActivity();
@@ -1344,7 +1364,8 @@ namespace LocalAIApp
                             }
                             break;
                         case "thinking_clear":
-                            _chatPanel.ClearThinkingPreview();
+                            if (_toolComparisonGenerationStage == 0)
+                                _chatPanel.ClearThinkingPreview();
                             break;
                         case "stream_start":
                             System.Diagnostics.Debug.WriteLine($"[C# stream_start] Received");
@@ -1352,14 +1373,19 @@ namespace LocalAIApp
                             ClearPendingStreamingTokens();
                             _isStreamingResponse = true;
                             _receivedFirstToken = false;
-                            _chatPanel.StartStreamingMessage();
+                            if (_toolComparisonGenerationStage == 0)
+                                _chatPanel.StartStreamingMessage();
                             _streamRenderTimer.Start();
                             break;
                         case "stream_token":
                             MarkGenerationProgress();
                             if (!string.IsNullOrEmpty(msg.Content))
                             {
-                                QueueStreamingToken(msg.Content);
+                                var toolComparisonStage = _toolComparisonGenerationStage;
+                                if (toolComparisonStage > 0)
+                                    _modelComparisonForm?.AppendToken(toolComparisonStage, msg.Content);
+                                else
+                                    QueueStreamingToken(msg.Content);
                             }
                             break;
                         case "stream_end":
@@ -1378,12 +1404,26 @@ namespace LocalAIApp
                             _streamRenderTimer.Stop();
                             try
                             {
-                                FlushPendingStreamingTokens();
+                                if (_toolComparisonGenerationStage > 0)
+                                    _modelComparisonForm?.FlushPendingTokens();
+                                else
+                                    FlushPendingStreamingTokens();
                             }
                             catch (Exception flushException)
                             {
                                 ClearPendingStreamingTokens();
                                 LogException("Affichage des derniers jetons", flushException);
+                            }
+
+                            var toolComparisonStage = _toolComparisonGenerationStage;
+                            if (toolComparisonStage > 0)
+                            {
+                                if (toolComparisonStage == 1 &&
+                                    TryStartToolComparisonSecondGeneration(msg, streamError, generationTimedOut))
+                                    break;
+
+                                CompleteToolComparisonResponse(toolComparisonStage, msg, streamError, generationTimedOut);
+                                break;
                             }
 
                             if (TryStartComparisonSecondGeneration(msg, streamError))
@@ -1492,6 +1532,8 @@ namespace LocalAIApp
                         case "model_loading":
                             MarkGenerationProgress();
                             _statusBar.SetStatus("Chargement: " + msg.Content, StatusType.Info);
+                            if (_toolComparisonGenerationStage > 0)
+                                _modelComparisonForm?.SetStage(_toolComparisonGenerationStage, msg.Content);
                             break;
                         case "model_loaded":
                             _pendingBackendError = "";
@@ -2553,6 +2595,243 @@ namespace LocalAIApp
                     "L'installateur n'a pas pu démarrer. Le téléchargement a été supprimé; tu peux relancer la vérification des mises à jour.\n\n" + ex.Message,
                     "Mise à jour impossible", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private void OnOpenModelComparison(object sender, EventArgs e)
+        {
+            if (_modelComparisonForm != null && !_modelComparisonForm.IsDisposed)
+            {
+                _modelComparisonForm.SetModels(_availableComparisonModels, _selectedModelPath);
+                _modelComparisonForm.Activate();
+                return;
+            }
+
+            _modelComparisonForm = new ModelComparisonForm(_availableComparisonModels, _selectedModelPath);
+            _modelComparisonForm.CompareRequested += (_, request) => StartToolModelComparison(request);
+            _modelComparisonForm.CancelRequested += (_, _) => CancelGeneration(false);
+            _modelComparisonForm.FormClosed += (closedForm, _) =>
+            {
+                if (ReferenceEquals(_modelComparisonForm, closedForm))
+                    _modelComparisonForm = null;
+                if (_toolComparisonGenerationStage > 0)
+                    CancelGeneration(false);
+            };
+            ThemeColors.ApplyToControlTree(_modelComparisonForm);
+            _modelComparisonForm.Show(this);
+        }
+
+        private void StartToolModelComparison(ModelComparisonRequestedEventArgs request)
+        {
+            if (!_isPythonReady)
+            {
+                _modelComparisonForm?.SetRunning(false);
+                _modelComparisonForm?.SetStatus("Le backend IA démarre encore.", isError: true);
+                return;
+            }
+            if (_isGenerating || _imageGenerationActive)
+            {
+                _modelComparisonForm?.SetRunning(false);
+                _modelComparisonForm?.SetStatus(
+                    _imageGenerationActive
+                        ? "Attends la fin de la génération d’image."
+                        : "Attends la fin de la génération en cours.",
+                    isError: true);
+                return;
+            }
+            if (request.ModelA == null || request.ModelB == null ||
+                string.Equals(request.ModelA.Path, request.ModelB.Path, StringComparison.OrdinalIgnoreCase))
+            {
+                _modelComparisonForm?.SetRunning(false);
+                _modelComparisonForm?.SetStatus("Sélectionne deux modèles locaux différents.", isError: true);
+                return;
+            }
+
+            try
+            {
+                var firstRequest = BuildToolComparisonRequest(request.ModelA, request.Prompt);
+                _toolComparisonSecondRequestJson = BuildToolComparisonRequest(request.ModelB, request.Prompt);
+                _toolComparisonGenerationStage = 1;
+                _isGenerating = true;
+                _isStreamingResponse = false;
+                _isCancellingGeneration = false;
+                _generationTimedOut = false;
+                _pendingBackendError = "";
+                _receivedFirstToken = false;
+                _generationLastProgressTime = DateTime.Now;
+                System.Threading.Interlocked.Exchange(ref _generationOutputTokenCount, 0);
+                System.Threading.Interlocked.Exchange(ref _generationFirstTokenTimestamp, 0);
+                System.Threading.Interlocked.Exchange(ref _lastGenerationSpeedUpdateTimestamp, 0);
+                System.Threading.Interlocked.Exchange(ref _generationPausedTimestamp, 0);
+                System.Threading.Interlocked.Exchange(ref _generationPausedTicks, 0);
+                ClearPendingStreamingTokens();
+                _inputPanel.SetGenerating(true);
+                UpdateComparisonControls();
+                _modelComparisonForm?.SetRunning(true);
+                _modelComparisonForm?.SetStage(1);
+                _statusBar.SetStatus("Comparaison en cours · 1/2 : " + request.ModelA.Name, StatusType.Info);
+                _generationWatchdog?.Dispose();
+                _generationWatchdog = new System.Threading.Timer(
+                    GenerationWatchdogCallback,
+                    null,
+                    TimeSpan.FromSeconds(GenerationTimeoutSeconds),
+                    Timeout.InfiniteTimeSpan);
+                QueueToolComparisonRequest(firstRequest);
+            }
+            catch (Exception exception)
+            {
+                LogException("Préparation de la comparaison", exception);
+                FinishToolModelComparison("Impossible de préparer la comparaison : " + exception.Message, StatusType.Error);
+            }
+        }
+
+        private string BuildToolComparisonRequest(LocalModelInfo model, string prompt)
+        {
+            var history = new JArray();
+            if (!_appSettings.UltraLiteMode && !string.IsNullOrWhiteSpace(_appSettings.SystemPrompt))
+            {
+                history.Add(new JObject
+                {
+                    ["role"] = "system",
+                    ["content"] = _appSettings.SystemPrompt
+                });
+            }
+
+            var stopSequences = (_appSettings.StopSequences ?? "")
+                .Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(value => value.Trim().Replace("\\n", "\n", StringComparison.Ordinal))
+                .Where(value => value.Length > 0);
+
+            var request = new JObject
+            {
+                ["type"] = "generate",
+                ["model_path"] = model.Path,
+                ["conversation_id"] = JValue.CreateNull(),
+                ["generate_title"] = false,
+                ["title_messages"] = new JArray(),
+                ["conversation_title_prompt"] = JValue.CreateNull(),
+                ["conversation_title_model_path"] = "",
+                ["prompt"] = prompt,
+                ["goal_mode"] = false,
+                ["history"] = history,
+                ["attachments"] = new JArray(),
+                ["stream"] = true,
+                ["temperature"] = _appSettings.Temperature,
+                ["top_p"] = _appSettings.TopP,
+                ["top_k"] = _appSettings.TopK,
+                ["min_p"] = _appSettings.MinP,
+                ["max_tokens"] = _appSettings.MaxTokens,
+                ["repeat_penalty"] = _appSettings.RepeatPenalty,
+                ["repeat_last_n"] = _appSettings.RepeatLastN,
+                ["presence_penalty"] = _appSettings.PresencePenalty,
+                ["frequency_penalty"] = _appSettings.FrequencyPenalty,
+                ["seed"] = _appSettings.Seed,
+                ["stop"] = JArray.FromObject(stopSequences),
+                ["context_size"] = _appSettings.ContextSize,
+                ["ngl"] = _appSettings.Ngl,
+                ["threads"] = _appSettings.Threads > 0 ? _appSettings.Threads : Environment.ProcessorCount,
+                ["use_mmap"] = _appSettings.UseMmapForModel,
+                ["reasoning_effort"] = _appSettings.ReasoningEffort,
+                ["ultra_lite"] = _appSettings.UltraLiteMode,
+                ["enable_web_access"] = false,
+                ["enable_code_execution"] = false,
+                ["enable_system_commands"] = false,
+                ["enable_forum"] = false,
+                ["enable_subagents"] = false,
+                ["available_local_models"] = new JArray(),
+                ["available_subagent_models"] = new JArray(),
+                ["code_workspace"] = "",
+                ["default_image_model_path"] = "",
+                ["default_omni_model_path"] = "",
+                ["keep_chat_model_loaded_for_omni"] = false,
+                ["use_disk_for_image_memory"] = false,
+                ["image_engine_memory_limit_gb"] = _appSettings.ImageEngineMemoryLimitGb,
+                ["image_minimum_free_disk_gb"] = _appSettings.ImageMinimumFreeDiskGb,
+                ["generation_timeout_seconds"] = GenerationTimeoutSeconds,
+                ["code_execution_timeout_seconds"] = _appSettings.CodeExecutionTimeoutSeconds
+            };
+
+            return request.ToString(Formatting.None);
+        }
+
+        private void QueueToolComparisonRequest(string requestJson)
+        {
+            QueuePythonBackendWrite(requestJson, exception =>
+            {
+                if (exception == null || IsDisposed || Disposing || !IsHandleCreated)
+                    return;
+                try
+                {
+                    BeginInvoke(new Action(() =>
+                        FinishToolModelComparison("L’envoi au backend a échoué : " + exception.Message, StatusType.Error)));
+                }
+                catch (InvalidOperationException) { }
+            });
+        }
+
+        private bool TryStartToolComparisonSecondGeneration(PythonMessage message, string? streamError, bool generationTimedOut)
+        {
+            if (_toolComparisonGenerationStage != 1 ||
+                message.Cancelled ||
+                generationTimedOut ||
+                !string.IsNullOrWhiteSpace(streamError) ||
+                string.IsNullOrWhiteSpace(_toolComparisonSecondRequestJson))
+                return false;
+
+            var firstContent = message.Content ?? "";
+            _modelComparisonForm?.CompleteResponse(1, firstContent);
+            _toolComparisonGenerationStage = 2;
+            _isStreamingResponse = false;
+            _generationLastProgressTime = DateTime.Now;
+            _generationWatchdog?.Dispose();
+            _generationWatchdog = new System.Threading.Timer(
+                GenerationWatchdogCallback,
+                null,
+                TimeSpan.FromSeconds(GenerationTimeoutSeconds),
+                Timeout.InfiniteTimeSpan);
+
+            var secondRequest = _toolComparisonSecondRequestJson;
+            _toolComparisonSecondRequestJson = "";
+            _modelComparisonForm?.SetStage(2);
+            _statusBar.SetStatus("Comparaison en cours · 2/2", StatusType.Info);
+            QueueToolComparisonRequest(secondRequest);
+            return true;
+        }
+
+        private void CompleteToolComparisonResponse(int stage, PythonMessage message, string? streamError, bool generationTimedOut)
+        {
+            _modelComparisonForm?.CompleteResponse(stage, message.Content ?? "");
+            var status = !string.IsNullOrWhiteSpace(streamError)
+                ? "Erreur de génération : " + streamError
+                : generationTimedOut
+                    ? "Génération arrêtée, délai dépassé."
+                    : message.Cancelled
+                        ? "Comparaison annulée."
+                        : "Comparaison terminée.";
+            FinishToolModelComparison(status,
+                !string.IsNullOrWhiteSpace(streamError) || generationTimedOut
+                    ? StatusType.Error
+                    : message.Cancelled ? StatusType.Warning : StatusType.Success);
+        }
+
+        private void FinishToolModelComparison(string status, StatusType statusType)
+        {
+            _toolComparisonGenerationStage = 0;
+            _toolComparisonSecondRequestJson = "";
+            _generationWatchdog?.Dispose();
+            _generationWatchdog = null;
+            _streamRenderTimer.Stop();
+            ClearPendingStreamingTokens();
+            _isGenerating = false;
+            _isStreamingResponse = false;
+            _isCancellingGeneration = false;
+            _generationTimedOut = false;
+            _pendingBackendError = "";
+            _inputPanel.SetGenerating(false);
+            UpdateComparisonControls();
+            _modelComparisonForm?.SetRunning(false);
+            _modelComparisonForm?.SetStatus(status, statusType == StatusType.Error);
+            _statusBar.SetStatus(status, statusType);
+            ApplyPendingUpdateWhenIdle();
         }
 
         private void OnOpenImageGenerator(object sender, EventArgs e)
@@ -4998,6 +5277,7 @@ namespace LocalAIApp
         public event EventHandler ImageGeneratorClicked;
         public event EventHandler? ForumClicked;
         public event EventHandler? SubagentActivityClicked;
+        public event EventHandler? CompareModelsClicked;
         public event EventHandler CheckForUpdatesClicked;
 
         public ModernMenuStrip()
@@ -5025,6 +5305,7 @@ namespace LocalAIApp
             toolsMenu.DropDownItems.Add(CreateItem("Générer une image…", null, (s, e) => ImageGeneratorClicked?.Invoke(this, e)));
             toolsMenu.DropDownItems.Add(CreateItem("Forum des IA…", null, (s, e) => ForumClicked?.Invoke(this, e)));
             toolsMenu.DropDownItems.Add(CreateItem("Suivi des tâches IA…", null, (s, e) => SubagentActivityClicked?.Invoke(this, e)));
+            toolsMenu.DropDownItems.Add(CreateItem("Comparer deux modèles…", null, (s, e) => CompareModelsClicked?.Invoke(this, e)));
             toolsMenu.DropDownItems.Add(CreateItem("Parametres...", "Ctrl+P", (s, e) => SettingsClicked?.Invoke(this, e)));
             toolsMenu.DropDownItems.Add(new ToolStripSeparator());
             toolsMenu.DropDownItems.Add(CreateItem("Vérifier les mises à jour…", null, (s, e) => CheckForUpdatesClicked?.Invoke(this, e)));
