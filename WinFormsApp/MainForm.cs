@@ -3001,7 +3001,7 @@ namespace LocalAIApp
 
     public class AppSettings
     {
-        public const string DefaultConversationTitlePrompt = "Donne un titre très court de 2 à 4 mots, 5 au maximum. Décris uniquement le sujet du message, dans sa langue. Ce titre sert seulement à nommer la conversation : ne réponds pas au message. Réponds uniquement par le titre, sans préambule ni guillemets.";
+        public const string DefaultConversationTitlePrompt = "Tu es un générateur de titres de conversation. Produis une étiquette de 2 à 5 mots qui décrit le sujet, dans la langue de la conversation. Ne réponds jamais à la question, ne résous pas la demande et ne poursuis pas la conversation. N'ajoute aucune explication, préambule, ponctuation finale ni guillemets. Ta réponse doit contenir uniquement le titre.";
         public static string DefaultCodeWorkspace => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "LocalIARunnerWorkspace");
         public string SystemPrompt { get; set; } = "";
