@@ -31,7 +31,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           try {
-            $releaseListOutput = gh release list --limit 100 --json tagName 2>&1
+            $releaseListOutput = gh release list --limit 100 --json tagName --repo $env:GITHUB_REPOSITORY 2>&1
             if ($LASTEXITCODE -ne 0) { throw "Unable to list GitHub releases.`n$($releaseListOutput | Out-String)" }
             $releases = @($releaseListOutput | Out-String | ConvertFrom-Json)
             $versionNumbers = @($releases | ForEach-Object {
@@ -86,7 +86,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $releaseListOutput = gh release list --limit 100 --json tagName 2>&1
+          $releaseListOutput = gh release list --limit 100 --json tagName --repo $env:GITHUB_REPOSITORY 2>&1
           if ($LASTEXITCODE -ne 0) { Write-Output $releaseListOutput; throw "Unable to list GitHub releases." }
           $releases = @($releaseListOutput | Out-String | ConvertFrom-Json)
 
@@ -123,17 +123,32 @@ jobs:
 
           Les modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.
           "@
+          $notesPath = Join-Path $env:RUNNER_TEMP "LocalIARunner-release-notes.md"
+          Set-Content -LiteralPath $notesPath -Value $notes -Encoding utf8
 
           $existingRelease = $releases | Where-Object { $_.tagName -eq $tag }
           if ($existingRelease) {
-            gh release upload $tag $installer $portable --clobber
-            if ($LASTEXITCODE -ne 0) { throw "Unable to upload release assets." }
-            gh release edit $tag --title "Local IA Runner $version" --notes $notes
+            $publishOutput = gh release upload $tag $installer $portable --clobber --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+            if ($publishExitCode -eq 0) {
+              $publishOutput = gh release edit $tag --title "Local IA Runner $version" --notes-file $notesPath --repo $env:GITHUB_REPOSITORY 2>&1
+              $publishExitCode = $LASTEXITCODE
+            }
           }
           else {
-            gh release create $tag $installer $portable --title "Local IA Runner $version" --notes $notes --target $env:GITHUB_SHA --latest
+            $publishOutput = gh release create $tag $installer $portable --title "Local IA Runner $version" --notes-file $notesPath --target $env:GITHUB_SHA --latest --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
           }
-          if ($LASTEXITCODE -ne 0) { throw "GitHub release publication failed (gh exit code $LASTEXITCODE)." }
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release publication::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release publication failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release publication failed (gh exit code $publishExitCode)."
+          }
 
           $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
           $portableHash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -160,7 +175,7 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath 'latest-release.json' -Encoding utf8
 
-          gh release upload $tag 'latest-release.json' --clobber
+          gh release upload $tag 'latest-release.json' --clobber --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) { throw "Unable to upload the latest-release manifest." }
 
           git config user.name 'github-actions[bot]'
