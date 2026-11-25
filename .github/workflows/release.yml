@@ -31,13 +31,1234 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           try {
-            $releaseListOutput = gh release list --limit 100 --json tagName --repo $env:GITHUB_REPOSITORY 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "Unable to list GitHub releases.`n$($releaseListOutput | Out-String)" }
-            $releases = @($releaseListOutput | Out-String | ConvertFrom-Json)
-            $versionNumbers = @($releases | ForEach-Object {
-              if ($_.tagName -match '^v1\.0\.(\d+)$') { [int]$Matches[1] }
+            $releaseDataOutput = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "Unable to list GitHub releases. $($releaseDataOutput | Out-String)" }
+            $releaseObjects = @($releaseDataOutput | Out-String | ConvertFrom-Json)
+            $stableReleases = @($releaseObjects | Where-Object { $_.tag_name -match '^v1\.0\.\d+
+            & .\WinFormsApp\Installer\build-installer.ps1 -AppVersion $version
+            if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
+            & .\WinFormsApp\Installer\build-portable.ps1 -AppVersion $version
+            if ($LASTEXITCODE -ne 0) { throw "Portable package build failed." }
+          }
+          catch {
+            $exceptionText = "$($_.Exception.Message)`n$($_.ScriptStackTrace)"
+            $annotationText = $exceptionText.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A').Replace(':', '%3A').Replace(',', '%2C')
+            Write-Output "::error title=Build failure::$annotationText"
+            $failureDetails = @(
+              '## Build failure details',
+              '',
+              '```text',
+              $_.Exception.Message,
+              $_.ScriptStackTrace,
+              '```'
+            ) -join "`n"
+            try {
+              if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+                Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $failureDetails -Encoding utf8
+              }
+            }
+            catch {
+              Write-Output '::warning title=Build diagnostic::Could not add details to the job summary.'
+            }
+            try {
+              Set-Content -LiteralPath 'build-failure-diagnostic.txt' -Value $failureDetails -Encoding utf8
+              git config user.name 'github-actions[bot]'
+              git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+              git add --force -- build-failure-diagnostic.txt
+              git commit -m '[skip ci] Store build failure diagnostic'
+              if ($LASTEXITCODE -ne 0) { throw 'Could not commit diagnostic file.' }
+              git push origin "HEAD:$env:GITHUB_REF_NAME"
+              if ($LASTEXITCODE -ne 0) { throw 'Could not push diagnostic file.' }
+            }
+            catch {
+              Write-Output "::warning title=Build diagnostic::Could not save diagnostic file."
+            }
+            throw
+          }
+
+      - name: Publish GitHub release and update manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseDataOutput = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "Unable to list GitHub releases. $($releaseDataOutput | Out-String)" }
+          $releaseObjects = @($releaseDataOutput | Out-String | ConvertFrom-Json)
+          $stableReleases = @($releaseObjects | Where-Object { $_.tag_name -match '^v1\.0\.\d+
+
+          $commitSubject = (git log -1 --format=%s).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit subject." }
+          $commitBody = (git log -1 --format=%b | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit description." }
+          $releaseSummary = $commitSubject -replace '^\[publish-release\]\s*', ''
+          if ([string]::IsNullOrWhiteSpace($releaseSummary)) { $releaseSummary = "Améliorations de Local IA Runner" }
+          $changeSection = if ([string]::IsNullOrWhiteSpace($commitBody)) {
+            "- $releaseSummary"
+          } else {
+            "### $releaseSummary`n`n$commitBody"
+          }
+
+          $versionNumbers = @($releases | ForEach-Object {
+            if ($_.tagName -match '^v1\.0\.(\d+)$') { [int]$Matches[1] }
+          })
+          if ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
+          else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
+          $version = "1.0.$versionNumber"
+          $tag = "v$version"
+          $installer = "artifacts\installer\LocalIARunner-Setup-x64.exe"
+          $portable = "artifacts\portable\LocalIARunner-Portable-x64-$version.zip"
+          $notes = @"
+          ## Nouveautés de Local IA Runner $version
+
+          $changeSection
+
+          ## Téléchargements
+
+          - `LocalIARunner-Setup-x64.exe` : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.
+          - `LocalIARunner-Portable-x64-$version.zip` : version portable à extraire et lancer.
+
+          Les modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.
+          "@
+          $notesPath = Join-Path $env:RUNNER_TEMP "LocalIARunner-release-notes.md"
+          Set-Content -LiteralPath $notesPath -Value $notes -Encoding utf8
+
+          $existingRelease = $releaseObjects | Where-Object { $_.tag_name -eq $tag }
+          if ($existingRelease) {
+            $publishOutput = gh release edit $tag --title "Local IA Runner $version" --notes-file $notesPath --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          else {
+            $publishOutput = gh release create $tag --title "Local IA Runner $version" --notes-file $notesPath --target $env:GITHUB_SHA --latest --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release creation::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release creation failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release creation failed (gh exit code $publishExitCode)."
+          }
+
+          function Upload-ReleaseAsset {
+            param([string]$AssetPath, [string]$AssetLabel)
+            for ($attempt = 1; $attempt -le 5; $attempt++) {
+              $uploadOutput = gh release upload $tag $AssetPath --clobber --repo $env:GITHUB_REPOSITORY 2>&1
+              if ($LASTEXITCODE -eq 0) { return }
+              $uploadDetails = $uploadOutput | Out-String
+              Write-Output "::warning title=GitHub release asset retry::$AssetLabel upload attempt $attempt failed: $uploadDetails"
+              if ($attempt -lt 5) { Start-Sleep -Seconds ([Math]::Min(10 * $attempt, 40)) }
+            }
+            $detailsLine = [string](@($uploadOutput)[0])
+            Write-Output ("::error title=GitHub release asset upload::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release asset upload failure", "", "$AssetLabel upload failed after 5 attempts.", ($uploadOutput | Out-String)) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release asset upload failed for $AssetLabel after 5 attempts."
+          }
+
+          Upload-ReleaseAsset $installer "Windows installer"
+          Upload-ReleaseAsset $portable "Portable Windows archive"
+
+          $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $portableHash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash.ToLowerInvariant()
+          $installerSize = [long](Get-Item -LiteralPath $installer).Length
+          $portableSize = [long](Get-Item -LiteralPath $portable).Length
+          $manifest = [ordered]@{
+            tag_name = $tag
+            html_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/$tag"
+            body = $notes
+            assets = @(
+              [ordered]@{
+                name = "LocalIARunner-Setup-x64.exe"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Setup-x64.exe"
+                digest = "sha256:$installerHash"
+                size = $installerSize
+              },
+              [ordered]@{
+                name = "LocalIARunner-Portable-x64-$version.zip"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Portable-x64-$version.zip"
+                digest = "sha256:$portableHash"
+                size = $portableSize
+              }
+            )
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath 'latest-release.json' -Encoding utf8
+
+          Upload-ReleaseAsset 'latest-release.json' "Latest release manifest"
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- latest-release.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "[skip ci] Update latest release manifest"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to commit the latest-release manifest." }
+            git push origin "HEAD:$env:GITHUB_REF_NAME"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to publish the latest-release manifest." }
+          }
+ })
+            $versionNumbers = @($stableReleases | ForEach-Object {
+              if ($_.tag_name -match '^v1\.0\.(\d+)
+            & .\WinFormsApp\Installer\build-installer.ps1 -AppVersion $version
+            if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
+            & .\WinFormsApp\Installer\build-portable.ps1 -AppVersion $version
+            if ($LASTEXITCODE -ne 0) { throw "Portable package build failed." }
+          }
+          catch {
+            $exceptionText = "$($_.Exception.Message)`n$($_.ScriptStackTrace)"
+            $annotationText = $exceptionText.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A').Replace(':', '%3A').Replace(',', '%2C')
+            Write-Output "::error title=Build failure::$annotationText"
+            $failureDetails = @(
+              '## Build failure details',
+              '',
+              '```text',
+              $_.Exception.Message,
+              $_.ScriptStackTrace,
+              '```'
+            ) -join "`n"
+            try {
+              if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+                Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $failureDetails -Encoding utf8
+              }
+            }
+            catch {
+              Write-Output '::warning title=Build diagnostic::Could not add details to the job summary.'
+            }
+            try {
+              Set-Content -LiteralPath 'build-failure-diagnostic.txt' -Value $failureDetails -Encoding utf8
+              git config user.name 'github-actions[bot]'
+              git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+              git add --force -- build-failure-diagnostic.txt
+              git commit -m '[skip ci] Store build failure diagnostic'
+              if ($LASTEXITCODE -ne 0) { throw 'Could not commit diagnostic file.' }
+              git push origin "HEAD:$env:GITHUB_REF_NAME"
+              if ($LASTEXITCODE -ne 0) { throw 'Could not push diagnostic file.' }
+            }
+            catch {
+              Write-Output "::warning title=Build diagnostic::Could not save diagnostic file."
+            }
+            throw
+          }
+
+      - name: Publish GitHub release and update manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseListOutput = gh release list --limit 100 --json tagName --repo $env:GITHUB_REPOSITORY 2>&1
+          if ($LASTEXITCODE -ne 0) { Write-Output $releaseListOutput; throw "Unable to list GitHub releases." }
+          $releases = @($releaseListOutput | Out-String | ConvertFrom-Json)
+
+          $commitSubject = (git log -1 --format=%s).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit subject." }
+          $commitBody = (git log -1 --format=%b | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit description." }
+          $releaseSummary = $commitSubject -replace '^\[publish-release\]\s*', ''
+          if ([string]::IsNullOrWhiteSpace($releaseSummary)) { $releaseSummary = "Améliorations de Local IA Runner" }
+          $changeSection = if ([string]::IsNullOrWhiteSpace($commitBody)) {
+            "- $releaseSummary"
+          } else {
+            "### $releaseSummary`n`n$commitBody"
+          }
+
+          $versionNumbers = @($releases | ForEach-Object {
+            if ($_.tagName -match '^v1\.0\.(\d+)$') { [int]$Matches[1] }
+          })
+          if ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
+          else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
+          $version = "1.0.$versionNumber"
+          $tag = "v$version"
+          $installer = "artifacts\installer\LocalIARunner-Setup-x64.exe"
+          $portable = "artifacts\portable\LocalIARunner-Portable-x64-$version.zip"
+          $notes = @"
+          ## Nouveautés de Local IA Runner $version
+
+          $changeSection
+
+          ## Téléchargements
+
+          - `LocalIARunner-Setup-x64.exe` : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.
+          - `LocalIARunner-Portable-x64-$version.zip` : version portable à extraire et lancer.
+
+          Les modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.
+          "@
+          $notesPath = Join-Path $env:RUNNER_TEMP "LocalIARunner-release-notes.md"
+          Set-Content -LiteralPath $notesPath -Value $notes -Encoding utf8
+
+          $existingRelease = $releases | Where-Object { $_.tagName -eq $tag }
+          if ($existingRelease) {
+            $publishOutput = gh release edit $tag --title "Local IA Runner $version" --notes-file $notesPath --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          else {
+            $publishOutput = gh release create $tag --title "Local IA Runner $version" --notes-file $notesPath --target $env:GITHUB_SHA --latest --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release creation::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release creation failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release creation failed (gh exit code $publishExitCode)."
+          }
+
+          $publishOutput = gh release upload $tag $installer $portable --clobber --repo $env:GITHUB_REPOSITORY 2>&1
+          $publishExitCode = $LASTEXITCODE
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release asset upload::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release asset upload failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release asset upload failed (gh exit code $publishExitCode)."
+          }
+
+          $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $portableHash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash.ToLowerInvariant()
+          $installerSize = [long](Get-Item -LiteralPath $installer).Length
+          $portableSize = [long](Get-Item -LiteralPath $portable).Length
+          $manifest = [ordered]@{
+            tag_name = $tag
+            html_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/$tag"
+            body = $notes
+            assets = @(
+              [ordered]@{
+                name = "LocalIARunner-Setup-x64.exe"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Setup-x64.exe"
+                digest = "sha256:$installerHash"
+                size = $installerSize
+              },
+              [ordered]@{
+                name = "LocalIARunner-Portable-x64-$version.zip"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Portable-x64-$version.zip"
+                digest = "sha256:$portableHash"
+                size = $portableSize
+              }
+            )
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath 'latest-release.json' -Encoding utf8
+
+          gh release upload $tag 'latest-release.json' --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw "Unable to upload the latest-release manifest." }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- latest-release.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "[skip ci] Update latest release manifest"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to commit the latest-release manifest." }
+            git push origin "HEAD:$env:GITHUB_REF_NAME"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to publish the latest-release manifest." }
+          }
+) { [int]$Matches[1] }
             })
-            if ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
+            $latestStable = $stableReleases | Sort-Object { [int]($_.tag_name -replace '^v1\.0\.', '') } -Descending | Select-Object -First 1
+            $latestHasBothPackages = $latestStable -and
+              ($latestStable.assets.name -contains 'LocalIARunner-Setup-x64.exe') -and
+              ($latestStable.assets.name -contains "LocalIARunner-Portable-x64-$($latestStable.tag_name -replace '^v1\.0\.', '').zip")
+            if ($latestStable -and -not $latestHasBothPackages) {
+              $versionNumber = [int]($latestStable.tag_name -replace '^v1\.0\.', '')
+            }
+            elseif ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
+            else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
+            $version = "1.0.$versionNumber"
+            & .\WinFormsApp\Installer\build-installer.ps1 -AppVersion $version
+            if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
+            & .\WinFormsApp\Installer\build-portable.ps1 -AppVersion $version
+            if ($LASTEXITCODE -ne 0) { throw "Portable package build failed." }
+          }
+          catch {
+            $exceptionText = "$($_.Exception.Message)`n$($_.ScriptStackTrace)"
+            $annotationText = $exceptionText.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A').Replace(':', '%3A').Replace(',', '%2C')
+            Write-Output "::error title=Build failure::$annotationText"
+            $failureDetails = @(
+              '## Build failure details',
+              '',
+              '```text',
+              $_.Exception.Message,
+              $_.ScriptStackTrace,
+              '```'
+            ) -join "`n"
+            try {
+              if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+                Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $failureDetails -Encoding utf8
+              }
+            }
+            catch {
+              Write-Output '::warning title=Build diagnostic::Could not add details to the job summary.'
+            }
+            try {
+              Set-Content -LiteralPath 'build-failure-diagnostic.txt' -Value $failureDetails -Encoding utf8
+              git config user.name 'github-actions[bot]'
+              git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+              git add --force -- build-failure-diagnostic.txt
+              git commit -m '[skip ci] Store build failure diagnostic'
+              if ($LASTEXITCODE -ne 0) { throw 'Could not commit diagnostic file.' }
+              git push origin "HEAD:$env:GITHUB_REF_NAME"
+              if ($LASTEXITCODE -ne 0) { throw 'Could not push diagnostic file.' }
+            }
+            catch {
+              Write-Output "::warning title=Build diagnostic::Could not save diagnostic file."
+            }
+            throw
+          }
+
+      - name: Publish GitHub release and update manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseListOutput = gh release list --limit 100 --json tagName --repo $env:GITHUB_REPOSITORY 2>&1
+          if ($LASTEXITCODE -ne 0) { Write-Output $releaseListOutput; throw "Unable to list GitHub releases." }
+          $releases = @($releaseListOutput | Out-String | ConvertFrom-Json)
+
+          $commitSubject = (git log -1 --format=%s).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit subject." }
+          $commitBody = (git log -1 --format=%b | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit description." }
+          $releaseSummary = $commitSubject -replace '^\[publish-release\]\s*', ''
+          if ([string]::IsNullOrWhiteSpace($releaseSummary)) { $releaseSummary = "Améliorations de Local IA Runner" }
+          $changeSection = if ([string]::IsNullOrWhiteSpace($commitBody)) {
+            "- $releaseSummary"
+          } else {
+            "### $releaseSummary`n`n$commitBody"
+          }
+
+          $versionNumbers = @($releases | ForEach-Object {
+            if ($_.tagName -match '^v1\.0\.(\d+)$') { [int]$Matches[1] }
+          })
+          if ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
+          else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
+          $version = "1.0.$versionNumber"
+          $tag = "v$version"
+          $installer = "artifacts\installer\LocalIARunner-Setup-x64.exe"
+          $portable = "artifacts\portable\LocalIARunner-Portable-x64-$version.zip"
+          $notes = @"
+          ## Nouveautés de Local IA Runner $version
+
+          $changeSection
+
+          ## Téléchargements
+
+          - `LocalIARunner-Setup-x64.exe` : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.
+          - `LocalIARunner-Portable-x64-$version.zip` : version portable à extraire et lancer.
+
+          Les modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.
+          "@
+          $notesPath = Join-Path $env:RUNNER_TEMP "LocalIARunner-release-notes.md"
+          Set-Content -LiteralPath $notesPath -Value $notes -Encoding utf8
+
+          $existingRelease = $releases | Where-Object { $_.tagName -eq $tag }
+          if ($existingRelease) {
+            $publishOutput = gh release edit $tag --title "Local IA Runner $version" --notes-file $notesPath --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          else {
+            $publishOutput = gh release create $tag --title "Local IA Runner $version" --notes-file $notesPath --target $env:GITHUB_SHA --latest --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release creation::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release creation failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release creation failed (gh exit code $publishExitCode)."
+          }
+
+          $publishOutput = gh release upload $tag $installer $portable --clobber --repo $env:GITHUB_REPOSITORY 2>&1
+          $publishExitCode = $LASTEXITCODE
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release asset upload::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release asset upload failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release asset upload failed (gh exit code $publishExitCode)."
+          }
+
+          $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $portableHash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash.ToLowerInvariant()
+          $installerSize = [long](Get-Item -LiteralPath $installer).Length
+          $portableSize = [long](Get-Item -LiteralPath $portable).Length
+          $manifest = [ordered]@{
+            tag_name = $tag
+            html_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/$tag"
+            body = $notes
+            assets = @(
+              [ordered]@{
+                name = "LocalIARunner-Setup-x64.exe"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Setup-x64.exe"
+                digest = "sha256:$installerHash"
+                size = $installerSize
+              },
+              [ordered]@{
+                name = "LocalIARunner-Portable-x64-$version.zip"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Portable-x64-$version.zip"
+                digest = "sha256:$portableHash"
+                size = $portableSize
+              }
+            )
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath 'latest-release.json' -Encoding utf8
+
+          gh release upload $tag 'latest-release.json' --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw "Unable to upload the latest-release manifest." }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- latest-release.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "[skip ci] Update latest release manifest"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to commit the latest-release manifest." }
+            git push origin "HEAD:$env:GITHUB_REF_NAME"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to publish the latest-release manifest." }
+          }
+ })
+          $versionNumbers = @($stableReleases | ForEach-Object {
+            if ($_.tag_name -match '^v1\.0\.(\d+)
+
+          $commitSubject = (git log -1 --format=%s).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit subject." }
+          $commitBody = (git log -1 --format=%b | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit description." }
+          $releaseSummary = $commitSubject -replace '^\[publish-release\]\s*', ''
+          if ([string]::IsNullOrWhiteSpace($releaseSummary)) { $releaseSummary = "Améliorations de Local IA Runner" }
+          $changeSection = if ([string]::IsNullOrWhiteSpace($commitBody)) {
+            "- $releaseSummary"
+          } else {
+            "### $releaseSummary`n`n$commitBody"
+          }
+
+          $versionNumbers = @($releases | ForEach-Object {
+            if ($_.tagName -match '^v1\.0\.(\d+)$') { [int]$Matches[1] }
+          })
+          if ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
+          else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
+          $version = "1.0.$versionNumber"
+          $tag = "v$version"
+          $installer = "artifacts\installer\LocalIARunner-Setup-x64.exe"
+          $portable = "artifacts\portable\LocalIARunner-Portable-x64-$version.zip"
+          $notes = @"
+          ## Nouveautés de Local IA Runner $version
+
+          $changeSection
+
+          ## Téléchargements
+
+          - `LocalIARunner-Setup-x64.exe` : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.
+          - `LocalIARunner-Portable-x64-$version.zip` : version portable à extraire et lancer.
+
+          Les modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.
+          "@
+          $notesPath = Join-Path $env:RUNNER_TEMP "LocalIARunner-release-notes.md"
+          Set-Content -LiteralPath $notesPath -Value $notes -Encoding utf8
+
+          $existingRelease = $releases | Where-Object { $_.tagName -eq $tag }
+          if ($existingRelease) {
+            $publishOutput = gh release edit $tag --title "Local IA Runner $version" --notes-file $notesPath --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          else {
+            $publishOutput = gh release create $tag --title "Local IA Runner $version" --notes-file $notesPath --target $env:GITHUB_SHA --latest --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release creation::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release creation failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release creation failed (gh exit code $publishExitCode)."
+          }
+
+          $publishOutput = gh release upload $tag $installer $portable --clobber --repo $env:GITHUB_REPOSITORY 2>&1
+          $publishExitCode = $LASTEXITCODE
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release asset upload::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release asset upload failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release asset upload failed (gh exit code $publishExitCode)."
+          }
+
+          $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $portableHash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash.ToLowerInvariant()
+          $installerSize = [long](Get-Item -LiteralPath $installer).Length
+          $portableSize = [long](Get-Item -LiteralPath $portable).Length
+          $manifest = [ordered]@{
+            tag_name = $tag
+            html_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/$tag"
+            body = $notes
+            assets = @(
+              [ordered]@{
+                name = "LocalIARunner-Setup-x64.exe"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Setup-x64.exe"
+                digest = "sha256:$installerHash"
+                size = $installerSize
+              },
+              [ordered]@{
+                name = "LocalIARunner-Portable-x64-$version.zip"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Portable-x64-$version.zip"
+                digest = "sha256:$portableHash"
+                size = $portableSize
+              }
+            )
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath 'latest-release.json' -Encoding utf8
+
+          gh release upload $tag 'latest-release.json' --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw "Unable to upload the latest-release manifest." }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- latest-release.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "[skip ci] Update latest release manifest"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to commit the latest-release manifest." }
+            git push origin "HEAD:$env:GITHUB_REF_NAME"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to publish the latest-release manifest." }
+          }
+ })
+            $versionNumbers = @($stableReleases | ForEach-Object {
+              if ($_.tag_name -match '^v1\.0\.(\d+)
+            & .\WinFormsApp\Installer\build-installer.ps1 -AppVersion $version
+            if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
+            & .\WinFormsApp\Installer\build-portable.ps1 -AppVersion $version
+            if ($LASTEXITCODE -ne 0) { throw "Portable package build failed." }
+          }
+          catch {
+            $exceptionText = "$($_.Exception.Message)`n$($_.ScriptStackTrace)"
+            $annotationText = $exceptionText.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A').Replace(':', '%3A').Replace(',', '%2C')
+            Write-Output "::error title=Build failure::$annotationText"
+            $failureDetails = @(
+              '## Build failure details',
+              '',
+              '```text',
+              $_.Exception.Message,
+              $_.ScriptStackTrace,
+              '```'
+            ) -join "`n"
+            try {
+              if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+                Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $failureDetails -Encoding utf8
+              }
+            }
+            catch {
+              Write-Output '::warning title=Build diagnostic::Could not add details to the job summary.'
+            }
+            try {
+              Set-Content -LiteralPath 'build-failure-diagnostic.txt' -Value $failureDetails -Encoding utf8
+              git config user.name 'github-actions[bot]'
+              git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+              git add --force -- build-failure-diagnostic.txt
+              git commit -m '[skip ci] Store build failure diagnostic'
+              if ($LASTEXITCODE -ne 0) { throw 'Could not commit diagnostic file.' }
+              git push origin "HEAD:$env:GITHUB_REF_NAME"
+              if ($LASTEXITCODE -ne 0) { throw 'Could not push diagnostic file.' }
+            }
+            catch {
+              Write-Output "::warning title=Build diagnostic::Could not save diagnostic file."
+            }
+            throw
+          }
+
+      - name: Publish GitHub release and update manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseListOutput = gh release list --limit 100 --json tagName --repo $env:GITHUB_REPOSITORY 2>&1
+          if ($LASTEXITCODE -ne 0) { Write-Output $releaseListOutput; throw "Unable to list GitHub releases." }
+          $releases = @($releaseListOutput | Out-String | ConvertFrom-Json)
+
+          $commitSubject = (git log -1 --format=%s).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit subject." }
+          $commitBody = (git log -1 --format=%b | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit description." }
+          $releaseSummary = $commitSubject -replace '^\[publish-release\]\s*', ''
+          if ([string]::IsNullOrWhiteSpace($releaseSummary)) { $releaseSummary = "Améliorations de Local IA Runner" }
+          $changeSection = if ([string]::IsNullOrWhiteSpace($commitBody)) {
+            "- $releaseSummary"
+          } else {
+            "### $releaseSummary`n`n$commitBody"
+          }
+
+          $versionNumbers = @($releases | ForEach-Object {
+            if ($_.tagName -match '^v1\.0\.(\d+)$') { [int]$Matches[1] }
+          })
+          if ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
+          else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
+          $version = "1.0.$versionNumber"
+          $tag = "v$version"
+          $installer = "artifacts\installer\LocalIARunner-Setup-x64.exe"
+          $portable = "artifacts\portable\LocalIARunner-Portable-x64-$version.zip"
+          $notes = @"
+          ## Nouveautés de Local IA Runner $version
+
+          $changeSection
+
+          ## Téléchargements
+
+          - `LocalIARunner-Setup-x64.exe` : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.
+          - `LocalIARunner-Portable-x64-$version.zip` : version portable à extraire et lancer.
+
+          Les modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.
+          "@
+          $notesPath = Join-Path $env:RUNNER_TEMP "LocalIARunner-release-notes.md"
+          Set-Content -LiteralPath $notesPath -Value $notes -Encoding utf8
+
+          $existingRelease = $releases | Where-Object { $_.tagName -eq $tag }
+          if ($existingRelease) {
+            $publishOutput = gh release edit $tag --title "Local IA Runner $version" --notes-file $notesPath --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          else {
+            $publishOutput = gh release create $tag --title "Local IA Runner $version" --notes-file $notesPath --target $env:GITHUB_SHA --latest --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release creation::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release creation failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release creation failed (gh exit code $publishExitCode)."
+          }
+
+          $publishOutput = gh release upload $tag $installer $portable --clobber --repo $env:GITHUB_REPOSITORY 2>&1
+          $publishExitCode = $LASTEXITCODE
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release asset upload::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release asset upload failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release asset upload failed (gh exit code $publishExitCode)."
+          }
+
+          $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $portableHash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash.ToLowerInvariant()
+          $installerSize = [long](Get-Item -LiteralPath $installer).Length
+          $portableSize = [long](Get-Item -LiteralPath $portable).Length
+          $manifest = [ordered]@{
+            tag_name = $tag
+            html_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/$tag"
+            body = $notes
+            assets = @(
+              [ordered]@{
+                name = "LocalIARunner-Setup-x64.exe"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Setup-x64.exe"
+                digest = "sha256:$installerHash"
+                size = $installerSize
+              },
+              [ordered]@{
+                name = "LocalIARunner-Portable-x64-$version.zip"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Portable-x64-$version.zip"
+                digest = "sha256:$portableHash"
+                size = $portableSize
+              }
+            )
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath 'latest-release.json' -Encoding utf8
+
+          gh release upload $tag 'latest-release.json' --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw "Unable to upload the latest-release manifest." }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- latest-release.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "[skip ci] Update latest release manifest"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to commit the latest-release manifest." }
+            git push origin "HEAD:$env:GITHUB_REF_NAME"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to publish the latest-release manifest." }
+          }
+) { [int]$Matches[1] }
+            })
+            $latestStable = $stableReleases | Sort-Object { [int]($_.tag_name -replace '^v1\.0\.', '') } -Descending | Select-Object -First 1
+            $latestHasBothPackages = $latestStable -and
+              ($latestStable.assets.name -contains 'LocalIARunner-Setup-x64.exe') -and
+              ($latestStable.assets.name -contains "LocalIARunner-Portable-x64-$($latestStable.tag_name -replace '^v1\.0\.', '').zip")
+            if ($latestStable -and -not $latestHasBothPackages) {
+              $versionNumber = [int]($latestStable.tag_name -replace '^v1\.0\.', '')
+            }
+            elseif ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
+            else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
+            $version = "1.0.$versionNumber"
+            & .\WinFormsApp\Installer\build-installer.ps1 -AppVersion $version
+            if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
+            & .\WinFormsApp\Installer\build-portable.ps1 -AppVersion $version
+            if ($LASTEXITCODE -ne 0) { throw "Portable package build failed." }
+          }
+          catch {
+            $exceptionText = "$($_.Exception.Message)`n$($_.ScriptStackTrace)"
+            $annotationText = $exceptionText.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A').Replace(':', '%3A').Replace(',', '%2C')
+            Write-Output "::error title=Build failure::$annotationText"
+            $failureDetails = @(
+              '## Build failure details',
+              '',
+              '```text',
+              $_.Exception.Message,
+              $_.ScriptStackTrace,
+              '```'
+            ) -join "`n"
+            try {
+              if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+                Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $failureDetails -Encoding utf8
+              }
+            }
+            catch {
+              Write-Output '::warning title=Build diagnostic::Could not add details to the job summary.'
+            }
+            try {
+              Set-Content -LiteralPath 'build-failure-diagnostic.txt' -Value $failureDetails -Encoding utf8
+              git config user.name 'github-actions[bot]'
+              git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+              git add --force -- build-failure-diagnostic.txt
+              git commit -m '[skip ci] Store build failure diagnostic'
+              if ($LASTEXITCODE -ne 0) { throw 'Could not commit diagnostic file.' }
+              git push origin "HEAD:$env:GITHUB_REF_NAME"
+              if ($LASTEXITCODE -ne 0) { throw 'Could not push diagnostic file.' }
+            }
+            catch {
+              Write-Output "::warning title=Build diagnostic::Could not save diagnostic file."
+            }
+            throw
+          }
+
+      - name: Publish GitHub release and update manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseListOutput = gh release list --limit 100 --json tagName --repo $env:GITHUB_REPOSITORY 2>&1
+          if ($LASTEXITCODE -ne 0) { Write-Output $releaseListOutput; throw "Unable to list GitHub releases." }
+          $releases = @($releaseListOutput | Out-String | ConvertFrom-Json)
+
+          $commitSubject = (git log -1 --format=%s).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit subject." }
+          $commitBody = (git log -1 --format=%b | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit description." }
+          $releaseSummary = $commitSubject -replace '^\[publish-release\]\s*', ''
+          if ([string]::IsNullOrWhiteSpace($releaseSummary)) { $releaseSummary = "Améliorations de Local IA Runner" }
+          $changeSection = if ([string]::IsNullOrWhiteSpace($commitBody)) {
+            "- $releaseSummary"
+          } else {
+            "### $releaseSummary`n`n$commitBody"
+          }
+
+          $versionNumbers = @($releases | ForEach-Object {
+            if ($_.tagName -match '^v1\.0\.(\d+)$') { [int]$Matches[1] }
+          })
+          if ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
+          else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
+          $version = "1.0.$versionNumber"
+          $tag = "v$version"
+          $installer = "artifacts\installer\LocalIARunner-Setup-x64.exe"
+          $portable = "artifacts\portable\LocalIARunner-Portable-x64-$version.zip"
+          $notes = @"
+          ## Nouveautés de Local IA Runner $version
+
+          $changeSection
+
+          ## Téléchargements
+
+          - `LocalIARunner-Setup-x64.exe` : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.
+          - `LocalIARunner-Portable-x64-$version.zip` : version portable à extraire et lancer.
+
+          Les modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.
+          "@
+          $notesPath = Join-Path $env:RUNNER_TEMP "LocalIARunner-release-notes.md"
+          Set-Content -LiteralPath $notesPath -Value $notes -Encoding utf8
+
+          $existingRelease = $releases | Where-Object { $_.tagName -eq $tag }
+          if ($existingRelease) {
+            $publishOutput = gh release edit $tag --title "Local IA Runner $version" --notes-file $notesPath --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          else {
+            $publishOutput = gh release create $tag --title "Local IA Runner $version" --notes-file $notesPath --target $env:GITHUB_SHA --latest --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release creation::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release creation failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release creation failed (gh exit code $publishExitCode)."
+          }
+
+          $publishOutput = gh release upload $tag $installer $portable --clobber --repo $env:GITHUB_REPOSITORY 2>&1
+          $publishExitCode = $LASTEXITCODE
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release asset upload::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release asset upload failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release asset upload failed (gh exit code $publishExitCode)."
+          }
+
+          $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $portableHash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash.ToLowerInvariant()
+          $installerSize = [long](Get-Item -LiteralPath $installer).Length
+          $portableSize = [long](Get-Item -LiteralPath $portable).Length
+          $manifest = [ordered]@{
+            tag_name = $tag
+            html_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/$tag"
+            body = $notes
+            assets = @(
+              [ordered]@{
+                name = "LocalIARunner-Setup-x64.exe"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Setup-x64.exe"
+                digest = "sha256:$installerHash"
+                size = $installerSize
+              },
+              [ordered]@{
+                name = "LocalIARunner-Portable-x64-$version.zip"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Portable-x64-$version.zip"
+                digest = "sha256:$portableHash"
+                size = $portableSize
+              }
+            )
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath 'latest-release.json' -Encoding utf8
+
+          gh release upload $tag 'latest-release.json' --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw "Unable to upload the latest-release manifest." }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- latest-release.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "[skip ci] Update latest release manifest"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to commit the latest-release manifest." }
+            git push origin "HEAD:$env:GITHUB_REF_NAME"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to publish the latest-release manifest." }
+          }
+) { [int]$Matches[1] }
+          })
+          $latestStable = $stableReleases | Sort-Object { [int]($_.tag_name -replace '^v1\.0\.', '') } -Descending | Select-Object -First 1
+          $latestHasBothPackages = $latestStable -and
+            ($latestStable.assets.name -contains 'LocalIARunner-Setup-x64.exe') -and
+            ($latestStable.assets.name -contains "LocalIARunner-Portable-x64-$($latestStable.tag_name -replace '^v1\.0\.', '').zip")
+          if ($latestStable -and -not $latestHasBothPackages) {
+            $versionNumber = [int]($latestStable.tag_name -replace '^v1\.0\.', '')
+          }
+          elseif ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
+          else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
+          $version = "1.0.$versionNumber"
+
+          $commitSubject = (git log -1 --format=%s).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit subject." }
+          $commitBody = (git log -1 --format=%b | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit description." }
+          $releaseSummary = $commitSubject -replace '^\[publish-release\]\s*', ''
+          if ([string]::IsNullOrWhiteSpace($releaseSummary)) { $releaseSummary = "Améliorations de Local IA Runner" }
+          $changeSection = if ([string]::IsNullOrWhiteSpace($commitBody)) {
+            "- $releaseSummary"
+          } else {
+            "### $releaseSummary`n`n$commitBody"
+          }
+
+          $versionNumbers = @($releases | ForEach-Object {
+            if ($_.tagName -match '^v1\.0\.(\d+)$') { [int]$Matches[1] }
+          })
+          if ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
+          else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
+          $version = "1.0.$versionNumber"
+          $tag = "v$version"
+          $installer = "artifacts\installer\LocalIARunner-Setup-x64.exe"
+          $portable = "artifacts\portable\LocalIARunner-Portable-x64-$version.zip"
+          $notes = @"
+          ## Nouveautés de Local IA Runner $version
+
+          $changeSection
+
+          ## Téléchargements
+
+          - `LocalIARunner-Setup-x64.exe` : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.
+          - `LocalIARunner-Portable-x64-$version.zip` : version portable à extraire et lancer.
+
+          Les modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.
+          "@
+          $notesPath = Join-Path $env:RUNNER_TEMP "LocalIARunner-release-notes.md"
+          Set-Content -LiteralPath $notesPath -Value $notes -Encoding utf8
+
+          $existingRelease = $releases | Where-Object { $_.tagName -eq $tag }
+          if ($existingRelease) {
+            $publishOutput = gh release edit $tag --title "Local IA Runner $version" --notes-file $notesPath --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          else {
+            $publishOutput = gh release create $tag --title "Local IA Runner $version" --notes-file $notesPath --target $env:GITHUB_SHA --latest --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release creation::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release creation failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release creation failed (gh exit code $publishExitCode)."
+          }
+
+          $publishOutput = gh release upload $tag $installer $portable --clobber --repo $env:GITHUB_REPOSITORY 2>&1
+          $publishExitCode = $LASTEXITCODE
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release asset upload::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release asset upload failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release asset upload failed (gh exit code $publishExitCode)."
+          }
+
+          $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $portableHash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash.ToLowerInvariant()
+          $installerSize = [long](Get-Item -LiteralPath $installer).Length
+          $portableSize = [long](Get-Item -LiteralPath $portable).Length
+          $manifest = [ordered]@{
+            tag_name = $tag
+            html_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/$tag"
+            body = $notes
+            assets = @(
+              [ordered]@{
+                name = "LocalIARunner-Setup-x64.exe"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Setup-x64.exe"
+                digest = "sha256:$installerHash"
+                size = $installerSize
+              },
+              [ordered]@{
+                name = "LocalIARunner-Portable-x64-$version.zip"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Portable-x64-$version.zip"
+                digest = "sha256:$portableHash"
+                size = $portableSize
+              }
+            )
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath 'latest-release.json' -Encoding utf8
+
+          gh release upload $tag 'latest-release.json' --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw "Unable to upload the latest-release manifest." }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- latest-release.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "[skip ci] Update latest release manifest"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to commit the latest-release manifest." }
+            git push origin "HEAD:$env:GITHUB_REF_NAME"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to publish the latest-release manifest." }
+          }
+ })
+            $versionNumbers = @($stableReleases | ForEach-Object {
+              if ($_.tag_name -match '^v1\.0\.(\d+)
+            & .\WinFormsApp\Installer\build-installer.ps1 -AppVersion $version
+            if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
+            & .\WinFormsApp\Installer\build-portable.ps1 -AppVersion $version
+            if ($LASTEXITCODE -ne 0) { throw "Portable package build failed." }
+          }
+          catch {
+            $exceptionText = "$($_.Exception.Message)`n$($_.ScriptStackTrace)"
+            $annotationText = $exceptionText.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A').Replace(':', '%3A').Replace(',', '%2C')
+            Write-Output "::error title=Build failure::$annotationText"
+            $failureDetails = @(
+              '## Build failure details',
+              '',
+              '```text',
+              $_.Exception.Message,
+              $_.ScriptStackTrace,
+              '```'
+            ) -join "`n"
+            try {
+              if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+                Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $failureDetails -Encoding utf8
+              }
+            }
+            catch {
+              Write-Output '::warning title=Build diagnostic::Could not add details to the job summary.'
+            }
+            try {
+              Set-Content -LiteralPath 'build-failure-diagnostic.txt' -Value $failureDetails -Encoding utf8
+              git config user.name 'github-actions[bot]'
+              git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+              git add --force -- build-failure-diagnostic.txt
+              git commit -m '[skip ci] Store build failure diagnostic'
+              if ($LASTEXITCODE -ne 0) { throw 'Could not commit diagnostic file.' }
+              git push origin "HEAD:$env:GITHUB_REF_NAME"
+              if ($LASTEXITCODE -ne 0) { throw 'Could not push diagnostic file.' }
+            }
+            catch {
+              Write-Output "::warning title=Build diagnostic::Could not save diagnostic file."
+            }
+            throw
+          }
+
+      - name: Publish GitHub release and update manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseListOutput = gh release list --limit 100 --json tagName --repo $env:GITHUB_REPOSITORY 2>&1
+          if ($LASTEXITCODE -ne 0) { Write-Output $releaseListOutput; throw "Unable to list GitHub releases." }
+          $releases = @($releaseListOutput | Out-String | ConvertFrom-Json)
+
+          $commitSubject = (git log -1 --format=%s).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit subject." }
+          $commitBody = (git log -1 --format=%b | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read commit description." }
+          $releaseSummary = $commitSubject -replace '^\[publish-release\]\s*', ''
+          if ([string]::IsNullOrWhiteSpace($releaseSummary)) { $releaseSummary = "Améliorations de Local IA Runner" }
+          $changeSection = if ([string]::IsNullOrWhiteSpace($commitBody)) {
+            "- $releaseSummary"
+          } else {
+            "### $releaseSummary`n`n$commitBody"
+          }
+
+          $versionNumbers = @($releases | ForEach-Object {
+            if ($_.tagName -match '^v1\.0\.(\d+)$') { [int]$Matches[1] }
+          })
+          if ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
+          else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
+          $version = "1.0.$versionNumber"
+          $tag = "v$version"
+          $installer = "artifacts\installer\LocalIARunner-Setup-x64.exe"
+          $portable = "artifacts\portable\LocalIARunner-Portable-x64-$version.zip"
+          $notes = @"
+          ## Nouveautés de Local IA Runner $version
+
+          $changeSection
+
+          ## Téléchargements
+
+          - `LocalIARunner-Setup-x64.exe` : installateur Windows 10/11 x64. L'application l'utilise aussi pour appliquer les mises à jour.
+          - `LocalIARunner-Portable-x64-$version.zip` : version portable à extraire et lancer.
+
+          Les modèles IA ne sont pas inclus; ils doivent être téléchargés séparément ou déjà présents sur l'ordinateur.
+          "@
+          $notesPath = Join-Path $env:RUNNER_TEMP "LocalIARunner-release-notes.md"
+          Set-Content -LiteralPath $notesPath -Value $notes -Encoding utf8
+
+          $existingRelease = $releases | Where-Object { $_.tagName -eq $tag }
+          if ($existingRelease) {
+            $publishOutput = gh release edit $tag --title "Local IA Runner $version" --notes-file $notesPath --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          else {
+            $publishOutput = gh release create $tag --title "Local IA Runner $version" --notes-file $notesPath --target $env:GITHUB_SHA --latest --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishExitCode = $LASTEXITCODE
+          }
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release creation::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release creation failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release creation failed (gh exit code $publishExitCode)."
+          }
+
+          $publishOutput = gh release upload $tag $installer $portable --clobber --repo $env:GITHUB_REPOSITORY 2>&1
+          $publishExitCode = $LASTEXITCODE
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release asset upload::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release asset upload failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release asset upload failed (gh exit code $publishExitCode)."
+          }
+
+          $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $portableHash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash.ToLowerInvariant()
+          $installerSize = [long](Get-Item -LiteralPath $installer).Length
+          $portableSize = [long](Get-Item -LiteralPath $portable).Length
+          $manifest = [ordered]@{
+            tag_name = $tag
+            html_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/tag/$tag"
+            body = $notes
+            assets = @(
+              [ordered]@{
+                name = "LocalIARunner-Setup-x64.exe"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Setup-x64.exe"
+                digest = "sha256:$installerHash"
+                size = $installerSize
+              },
+              [ordered]@{
+                name = "LocalIARunner-Portable-x64-$version.zip"
+                browser_download_url = "https://github.com/cholletflorentin/Local-IA-Runner/releases/download/$tag/LocalIARunner-Portable-x64-$version.zip"
+                digest = "sha256:$portableHash"
+                size = $portableSize
+              }
+            )
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath 'latest-release.json' -Encoding utf8
+
+          gh release upload $tag 'latest-release.json' --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw "Unable to upload the latest-release manifest." }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- latest-release.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "[skip ci] Update latest release manifest"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to commit the latest-release manifest." }
+            git push origin "HEAD:$env:GITHUB_REF_NAME"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to publish the latest-release manifest." }
+          }
+) { [int]$Matches[1] }
+            })
+            $latestStable = $stableReleases | Sort-Object { [int]($_.tag_name -replace '^v1\.0\.', '') } -Descending | Select-Object -First 1
+            $latestHasBothPackages = $latestStable -and
+              ($latestStable.assets.name -contains 'LocalIARunner-Setup-x64.exe') -and
+              ($latestStable.assets.name -contains "LocalIARunner-Portable-x64-$($latestStable.tag_name -replace '^v1\.0\.', '').zip")
+            if ($latestStable -and -not $latestHasBothPackages) {
+              $versionNumber = [int]($latestStable.tag_name -replace '^v1\.0\.', '')
+            }
+            elseif ($versionNumbers.Count -eq 0) { $versionNumber = 17 }
             else { $versionNumber = ($versionNumbers | Measure-Object -Maximum).Maximum + 1 }
             $version = "1.0.$versionNumber"
             & .\WinFormsApp\Installer\build-installer.ps1 -AppVersion $version
