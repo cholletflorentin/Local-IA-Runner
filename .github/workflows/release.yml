@@ -31,7 +31,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           try {
-            $releaseDataOutput = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" 2>&1
+                        $releaseDataOutput = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" 2>&1
             if ($LASTEXITCODE -ne 0) { throw "Unable to list GitHub releases. $($releaseDataOutput | Out-String)" }
             $releaseObjects = @($releaseDataOutput | Out-String | ConvertFrom-Json)
             $stableReleases = @($releaseObjects | Where-Object { $_.tag_name -match '^v1\.0\.\d+
@@ -81,7 +81,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $releaseDataOutput = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" 2>&1
+                    $releaseDataOutput = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" 2>&1
           if ($LASTEXITCODE -ne 0) { throw "Unable to list GitHub releases. $($releaseDataOutput | Out-String)" }
           $releaseObjects = @($releaseDataOutput | Out-String | ConvertFrom-Json)
           $stableReleases = @($releaseObjects | Where-Object { $_.tag_name -match '^v1\.0\.\d+
