@@ -1381,9 +1381,9 @@ namespace LocalAIApp
                             MarkGenerationProgress();
                             if (!string.IsNullOrEmpty(msg.Content))
                             {
-                                var toolComparisonStage = _toolComparisonGenerationStage;
-                                if (toolComparisonStage > 0)
-                                    _modelComparisonForm?.AppendToken(toolComparisonStage, msg.Content);
+                                var tokenComparisonStage = _toolComparisonGenerationStage;
+                                if (tokenComparisonStage > 0)
+                                    _modelComparisonForm?.AppendToken(tokenComparisonStage, msg.Content);
                                 else
                                     QueueStreamingToken(msg.Content);
                             }
