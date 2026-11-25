@@ -2,8 +2,10 @@
 
 ```text
 dotnet publish a échoué avec le code 1
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\MainForm.cs(19,43): error CS0535: 'MainForm' does not implement interface member 'IMessageFilter.PreFilterMessage(ref Message)' [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
+D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\MainForm.cs(3652,23): warning CS8618: Non-nullable property 'Error' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the property as nullable. [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
+D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\MainForm.cs(3655,23): warning CS8618: Non-nullable property 'Errors' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the property as nullable. [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
+D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\MainForm.cs(1384,37): error CS0136: A local or parameter named 'toolComparisonStage' cannot be declared in this scope because that name is used in an enclosing local scope to define a local or parameter [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
 at <ScriptBlock>, D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\Installer\build-installer.ps1: line 68
-at <ScriptBlock>, D:\a\_temp\f0fb0f2d-dbb9-4310-9cd8-bb7b5d943399.ps1: line 12
+at <ScriptBlock>, D:\a\_temp\e5ddcadc-3f2d-4b01-b46b-67bd2172ee42.ps1: line 12
 at <ScriptBlock>, <No file>: line 1
 ```
