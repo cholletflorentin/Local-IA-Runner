@@ -32,6 +32,7 @@ public sealed class ChatPanel : DoubleBufferedPanel
     private readonly System.Windows.Forms.Timer _initializationWatchdog = new() { Interval = 30_000 };
 
     public event Action<int>? EditMessageRequested;
+    public Func<Keys, bool>? ApplicationShortcutHandler { get; set; }
 
     public ChatPanel()
     {
@@ -349,6 +350,8 @@ public sealed class ChatPanel : DoubleBufferedPanel
             _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             _webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
             _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+            _webView.CoreWebView2.Settings.AreBrowserAcceleratorKeysEnabled = false;
+            _webView.CoreWebView2Controller.AcceleratorKeyPressed += OnAcceleratorKeyPressed;
             Directory.CreateDirectory(ChatMediaStorage.Root);
             _webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
                 "localia.media",
@@ -410,6 +413,17 @@ public sealed class ChatPanel : DoubleBufferedPanel
         RunScript($"window.localIA?.setTheme({ToJson(ThemeColors.IsDarkMode ? "dark" : "light")});");
         RunScript($"window.localIA?.setHeader({ToJson(_title)}, {ToJson(_modelName)});");
         RenderAll(forceBottom: true);
+    }
+
+    private void OnAcceleratorKeyPressed(object? sender, CoreWebView2AcceleratorKeyPressedEventArgs args)
+    {
+        if (args.KeyEventKind is not (CoreWebView2KeyEventKind.KeyDown or CoreWebView2KeyEventKind.SystemKeyDown))
+            return;
+
+        var modifiers = System.Windows.Forms.Control.ModifierKeys & Keys.Modifiers;
+        var keyData = (Keys)args.VirtualKey | modifiers;
+        if (ApplicationShortcutHandler?.Invoke(keyData) == true)
+            args.Handled = true;
     }
 
     private void OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs args)
@@ -746,3 +760,4 @@ public sealed class ChatPanel : DoubleBufferedPanel
         };
     }
 }
+

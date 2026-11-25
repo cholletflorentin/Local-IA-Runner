@@ -170,6 +170,7 @@ namespace LocalAIApp
 
             _chatPanel = new ChatPanel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8) };
             _chatPanel.EditMessageRequested += OnEditMessageRequested;
+            _chatPanel.ApplicationShortcutHandler = RouteChatShortcut;
             chatLayout.Controls.Add(_chatPanel, 0, 0);
 
             _inputPanel = new InputPanel { Dock = DockStyle.Fill, Margin = new Padding(0) };
@@ -2048,6 +2049,39 @@ namespace LocalAIApp
                         ScanModelsFolder();
                 }
             }
+        }
+
+        private bool RouteChatShortcut(Keys keyData)
+        {
+            var item = FindShortcutItem(_menuStrip.Items, keyData);
+            if (item == null || !item.Enabled)
+                return false;
+
+            try
+            {
+                BeginInvoke(new Action(item.PerformClick));
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        private static ToolStripMenuItem? FindShortcutItem(ToolStripItemCollection items, Keys keyData)
+        {
+            foreach (ToolStripItem item in items)
+            {
+                if (item is not ToolStripMenuItem menuItem)
+                    continue;
+                if (menuItem.ShortcutKeys == keyData)
+                    return menuItem;
+
+                var nested = FindShortcutItem(menuItem.DropDownItems, keyData);
+                if (nested != null)
+                    return nested;
+            }
+            return null;
         }
 
         private async void OnCheckForUpdates(object sender, EventArgs e)
@@ -5857,4 +5891,5 @@ namespace LocalAIApp
         }
     }
 }
+
 
