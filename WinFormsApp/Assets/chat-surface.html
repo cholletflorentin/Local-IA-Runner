@@ -64,6 +64,7 @@
       const host = document.getElementById('messages');
       const activity = document.getElementById('activity');
       const activityText = document.getElementById('activity-text');
+      const liveStreams = new Map();
       const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
       const post = data => { if (window.chrome?.webview) window.chrome.webview.postMessage(data); };
 
@@ -163,19 +164,37 @@
       function render(entries, forceBottom) {
         const shouldScroll = Boolean(forceBottom) || atBottom();
         const expanded = new Map([...host.querySelectorAll('details[data-thinking]')].map(item => [item.dataset.thinking, item.open]));
-        host.innerHTML = '<div class="day">Conversation</div>' + entries.map(renderEntry).join('');
+        const activeIndexes = new Set();
+        const visibleEntries = entries.map((entry, index) => {
+          if (!entry.streaming) return entry;
+          activeIndexes.add(index);
+          const live = liveStreams.get(index);
+          return live ? {...entry, content: live.content, thinking: live.thinking} : entry;
+        });
+        for (const index of liveStreams.keys()) {
+          if (!activeIndexes.has(index)) liveStreams.delete(index);
+        }
+        host.innerHTML = '<div class="day">Conversation</div>' + visibleEntries.map(renderEntry).join('');
         for (const details of host.querySelectorAll('details[data-thinking]')) {
           if (expanded.has(details.dataset.thinking)) details.open = expanded.get(details.dataset.thinking);
         }
         if (shouldScroll) host.scrollTop = host.scrollHeight;
       }
       function updateStreaming(index, entry) {
-        const article = host.querySelector('[data-message-index="' + index + '"]');
-        if (!article) { render([], true); return; }
+        liveStreams.set(index, {...entry});
+        let article = host.querySelector('[data-message-index="' + index + '"]');
+        if (!article) {
+          if (!host.querySelector('.day'))
+            host.insertAdjacentHTML('afterbegin', '<div class="day">Conversation</div>');
+          host.insertAdjacentHTML('beforeend', renderEntry(entry, index));
+          article = host.querySelector('[data-message-index="' + index + '"]');
+        }
+        const body = article?.querySelector('.entry-body');
+        if (!body) return;
         const wasBottom = atBottom();
         const details = article.querySelector('details[data-thinking]');
         const wasOpen = details?.open;
-        article.querySelector('.entry-body').innerHTML = entryBody(entry, index);
+        body.innerHTML = entryBody(entry, index);
         const nextDetails = article.querySelector('details[data-thinking]');
         if (nextDetails && typeof wasOpen === 'boolean') nextDetails.open = wasOpen;
         if (wasBottom) host.scrollTop = host.scrollHeight;
@@ -235,3 +254,4 @@
   </script>
 </body>
 </html>
+
