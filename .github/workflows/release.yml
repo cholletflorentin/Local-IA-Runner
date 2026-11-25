@@ -128,26 +128,35 @@ jobs:
 
           $existingRelease = $releases | Where-Object { $_.tagName -eq $tag }
           if ($existingRelease) {
-            $publishOutput = gh release upload $tag $installer $portable --clobber --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishOutput = gh release edit $tag --title "Local IA Runner $version" --notes-file $notesPath --repo $env:GITHUB_REPOSITORY 2>&1
             $publishExitCode = $LASTEXITCODE
-            if ($publishExitCode -eq 0) {
-              $publishOutput = gh release edit $tag --title "Local IA Runner $version" --notes-file $notesPath --repo $env:GITHUB_REPOSITORY 2>&1
-              $publishExitCode = $LASTEXITCODE
-            }
           }
           else {
-            $publishOutput = gh release create $tag $installer $portable --title "Local IA Runner $version" --notes-file $notesPath --target $env:GITHUB_SHA --latest --repo $env:GITHUB_REPOSITORY 2>&1
+            $publishOutput = gh release create $tag --title "Local IA Runner $version" --notes-file $notesPath --target $env:GITHUB_SHA --latest --repo $env:GITHUB_REPOSITORY 2>&1
             $publishExitCode = $LASTEXITCODE
           }
           if ($publishExitCode -ne 0) {
             $publishDetails = $publishOutput | Out-String
             $detailsLine = [string](@($publishOutput)[0])
-            Write-Output ("::error title=GitHub release publication::" + $detailsLine)
+            Write-Output ("::error title=GitHub release creation::" + $detailsLine)
             if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
-              $summaryDetails = @("## GitHub release publication failure", "", $publishDetails) -join [Environment]::NewLine
+              $summaryDetails = @("## GitHub release creation failure", "", $publishDetails) -join [Environment]::NewLine
               Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
             }
-            throw "GitHub release publication failed (gh exit code $publishExitCode)."
+            throw "GitHub release creation failed (gh exit code $publishExitCode)."
+          }
+
+          $publishOutput = gh release upload $tag $installer $portable --clobber --repo $env:GITHUB_REPOSITORY 2>&1
+          $publishExitCode = $LASTEXITCODE
+          if ($publishExitCode -ne 0) {
+            $publishDetails = $publishOutput | Out-String
+            $detailsLine = [string](@($publishOutput)[0])
+            Write-Output ("::error title=GitHub release asset upload::" + $detailsLine)
+            if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+              $summaryDetails = @("## GitHub release asset upload failure", "", $publishDetails) -join [Environment]::NewLine
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summaryDetails -Encoding utf8
+            }
+            throw "GitHub release asset upload failed (gh exit code $publishExitCode)."
           }
 
           $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
