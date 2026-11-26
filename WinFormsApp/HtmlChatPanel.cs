@@ -718,7 +718,7 @@ public sealed class ChatPanel : DoubleBufferedPanel
     {
         if (!_documentReady || IsDisposed)
             return;
-        var json = ToJson(_entries.Select(entry => entry.ToViewModel()).ToArray());
+        var json = ToJson(_entries.Select(entry => entry.ToViewModel(_speechSupported, _speechPendingMessageIndices)).ToArray());
         RunScript($"window.localIA?.render({json}, {(forceBottom ? "true" : "false")});");
         RunScript($"window.localIA?.setActivity({ToJson(_activity)});");
     }
@@ -730,7 +730,7 @@ public sealed class ChatPanel : DoubleBufferedPanel
         var index = _entries.IndexOf(_streamEntry);
         if (index < 0)
             return;
-        var json = ToJson(_streamEntry.ToViewModel());
+        var json = ToJson(_streamEntry.ToViewModel(_speechSupported, _speechPendingMessageIndices));
         RunScript($"window.localIA?.updateStreaming({index}, {json});");
     }
 
@@ -796,7 +796,7 @@ public sealed class ChatPanel : DoubleBufferedPanel
         public List<ChatAttachment> Attachments { get; set; } = new();
         public List<ComparisonColumn> Comparison { get; set; } = new();
 
-        public object ToViewModel() => new
+        public object ToViewModel(bool speechSupported, ISet<int> speechPendingMessageIndices) => new
         {
             role = Role,
             sender = Sender,
@@ -806,8 +806,8 @@ public sealed class ChatPanel : DoubleBufferedPanel
             systemKind = SystemKind,
             streaming = IsStreaming,
             conversationIndex = ConversationIndex,
-            canSpeak = Role == "assistant" && _speechSupported && ConversationIndex >= 0,
-            speechPending = _speechPendingMessageIndices.Contains(ConversationIndex),
+            canSpeak = Role == "assistant" && speechSupported && ConversationIndex >= 0,
+            speechPending = speechPendingMessageIndices.Contains(ConversationIndex),
             attachments = Attachments.Select(attachment => new
             {
                 name = attachment.Name,
