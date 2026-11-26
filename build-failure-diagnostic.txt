@@ -2,10 +2,11 @@
 
 ```text
 dotnet publish a échoué avec le code 1
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\MainForm.cs(3652,23): warning CS8618: Non-nullable property 'Error' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the property as nullable. [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\MainForm.cs(3655,23): warning CS8618: Non-nullable property 'Errors' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the property as nullable. [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
-D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\MainForm.cs(1384,37): error CS0136: A local or parameter named 'toolComparisonStage' cannot be declared in this scope because that name is used in an enclosing local scope to define a local or parameter [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
+D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\MainForm.cs(3830,23): warning CS8618: Non-nullable property 'Error' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the property as nullable. [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
+D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\MainForm.cs(3833,23): warning CS8618: Non-nullable property 'Errors' must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring the property as nullable. [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
+D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\HtmlChatPanel.cs(809,47): error CS0120: An object reference is required for the non-static field, method, or property 'ChatPanel._speechSupported' [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
+D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\HtmlChatPanel.cs(810,29): error CS0120: An object reference is required for the non-static field, method, or property 'ChatPanel._speechPendingMessageIndices' [D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\LocalAIApp.csproj]
 at <ScriptBlock>, D:\a\Local-IA-Runner\Local-IA-Runner\WinFormsApp\Installer\build-installer.ps1: line 68
-at <ScriptBlock>, D:\a\_temp\e5ddcadc-3f2d-4b01-b46b-67bd2172ee42.ps1: line 12
+at <ScriptBlock>, D:\a\_temp\bf7da63e-7c3f-47dd-a8af-f2702cdfe61f.ps1: line 12
 at <ScriptBlock>, <No file>: line 1
 ```
