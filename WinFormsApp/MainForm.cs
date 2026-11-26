@@ -47,6 +47,9 @@ namespace LocalAIApp
         private bool _isStreamingResponse = false;
         private bool _isCancellingGeneration = false;
         private bool _generationTimedOut = false;
+        private bool _supportsLlamaCppSpeech;
+        private List<string> _llamaCppVoices = new();
+        private readonly Dictionary<int, Message> _pendingSpeechMessages = new();
         private string _pendingBackendError = "";
         private bool _imageGenerationActive = false;
         private string _selectedModelName = "";
@@ -217,6 +220,7 @@ namespace LocalAIApp
             _inputPanel.SendClicked += OnSendMessage;
             _inputPanel.CancelClicked += OnCancelGeneration;
             _inputPanel.MessageEditCancelled += OnMessageEditCancelled;
+            _chatPanel.SpeakMessageRequested += OnSpeakMessageRequested;
             chatLayout.Controls.Add(_inputPanel, 0, 1);
 
             var chatSurface = new RoundedPanel { BackColor = ThemeColors.Surface, Padding = new Padding(0), Dock = DockStyle.Fill };
@@ -581,6 +585,9 @@ namespace LocalAIApp
                                     RequestCurrentModelUnload();
                                 _selectedModelPath = "";
                                 _selectedModelName = "";
+                                _supportsLlamaCppSpeech = false;
+                                _llamaCppVoices.Clear();
+                                _chatPanel.SetSpeechCapability(false);
                                 _inputPanel.SetModelSelected(false);
                             }
 
@@ -863,6 +870,14 @@ namespace LocalAIApp
 
         private void OnModelSelected(object sender, string modelPath)
         {
+            if (_pendingSpeechMessages.Count > 0)
+            {
+                _chatPanel.AddSystemMessage("Attendez la fin de la génération vocale avant de changer de modèle.", MessageType.Info);
+                if (!string.IsNullOrEmpty(_selectedModelPath))
+                    _sidebarPanel.SelectModel(_selectedModelPath);
+                return;
+            }
+
             if (_imageGenerationActive)
             {
                 _chatPanel.AddSystemMessage("Attendez la fin de la génération d'image avant de changer de modèle.", MessageType.Info);
@@ -905,6 +920,9 @@ namespace LocalAIApp
 
             if (modelChanged)
             {
+                _supportsLlamaCppSpeech = false;
+                _llamaCppVoices.Clear();
+                _chatPanel.SetSpeechCapability(false);
                 CancelMessageEdit(restoreDraft: true);
                 // Save the old conversation with its old model, then start a
                 // clean history/file for the newly selected model.
@@ -1042,6 +1060,117 @@ namespace LocalAIApp
                     System.Diagnostics.Debug.WriteLine("[Model capabilities] " + exception.Message);
                 }
             });
+        }
+
+        private void RequestLlamaCppSpeechCapabilities(string modelPath)
+        {
+            if (!_isPythonReady || string.IsNullOrWhiteSpace(modelPath))
+                return;
+
+            QueuePythonBackendWrite(JsonConvert.SerializeObject(new { type = "list_tts_voices" }), exception =>
+            {
+                if (!IsDisposed && IsHandleCreated)
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        _supportsLlamaCppSpeech = false;
+                        _llamaCppVoices.Clear();
+                        _chatPanel.SetSpeechCapability(false);
+                        System.Diagnostics.Debug.WriteLine("[llama.cpp voice capabilities] " + exception.Message);
+                    }));
+                }
+            });
+        }
+
+        private void OnSpeakMessageRequested(int messageIndex)
+        {
+            if (messageIndex < 0 || messageIndex >= _currentConversation.Count ||
+                !_supportsLlamaCppSpeech || _isGenerating)
+            {
+                _chatPanel.SetSpeechPending(messageIndex, false);
+                _chatPanel.AddSystemMessage(
+                    _isGenerating
+                        ? "Attendez la fin de la réponse avant de lancer sa lecture vocale."
+                        : "Le modèle chargé ne prend pas en charge la génération vocale llama.cpp.",
+                    MessageType.Info);
+                return;
+            }
+
+            var message = _currentConversation[messageIndex];
+            if (!string.Equals(message.Role, "assistant", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(message.Content))
+            {
+                _chatPanel.SetSpeechPending(messageIndex, false);
+                return;
+            }
+
+            if (_pendingSpeechMessages.ContainsKey(messageIndex))
+                return;
+            _pendingSpeechMessages[messageIndex] = message;
+            _chatPanel.SetSpeechPending(messageIndex, true);
+            _statusBar.SetStatus("Génération de la voix avec llama.cpp…", StatusType.Info);
+            QueuePythonBackendWrite(JsonConvert.SerializeObject(new
+            {
+                type = "synthesize_speech",
+                content = message.Content,
+                message_index = messageIndex,
+                model_path = _selectedModelPath,
+                voice = _appSettings.LlamaCppVoice,
+                timeout_seconds = GenerationTimeoutSeconds
+            }), exception =>
+            {
+                if (!IsDisposed && IsHandleCreated)
+                    BeginInvoke(new Action(() => CompleteSpeechError(messageIndex, exception.Message)));
+            });
+        }
+
+        private void CompleteSpeechError(int messageIndex, string error)
+        {
+            _pendingSpeechMessages.Remove(messageIndex);
+            _chatPanel.SetSpeechPending(messageIndex, false);
+            _chatPanel.AddSystemMessage("La lecture vocale a échoué : " + error, MessageType.Error);
+            if (!_isGenerating)
+                _statusBar.SetStatus("Lecture vocale échouée", StatusType.Error);
+        }
+
+        private void CompleteSpeechMessage(PythonMessage message)
+        {
+            var messageIndex = message.MessageIndex ?? -1;
+            if (!_pendingSpeechMessages.Remove(messageIndex, out var targetMessage))
+                return;
+            _chatPanel.SetSpeechPending(messageIndex, false);
+
+            var activeMessage = _currentConversation.FirstOrDefault(item => ReferenceEquals(item, targetMessage));
+            if (activeMessage == null || string.IsNullOrWhiteSpace(message.Path) || !File.Exists(message.Path))
+            {
+                _statusBar.SetStatus("Lecture vocale terminée", StatusType.Success);
+                return;
+            }
+
+            try
+            {
+                var attachment = new ChatAttachment
+                {
+                    Name = "Réponse vocale.wav",
+                    Path = message.Path,
+                    Kind = "audio",
+                    ContentType = "audio/wav"
+                };
+                if (ChatMediaStorage.GetMediaUrl(attachment.Path) == null)
+                    attachment = ChatMediaStorage.ImportGenerated(attachment.Path);
+                activeMessage.Attachments ??= new List<ChatAttachment>();
+                activeMessage.Attachments.RemoveAll(item =>
+                    string.Equals(item.Name, attachment.Name, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(item.ContentType, "audio/wav", StringComparison.OrdinalIgnoreCase));
+                activeMessage.Attachments.Add(attachment);
+                _chatPanel.RenderMessages(_currentConversation);
+                SaveConversation();
+                _statusBar.SetStatus("Audio vocal ajouté à la réponse", StatusType.Success);
+            }
+            catch (Exception exception)
+            {
+                CompleteSpeechError(messageIndex, exception.Message);
+            }
         }
 
         private void OnRefreshModels(object sender, EventArgs e)
@@ -1287,7 +1416,6 @@ namespace LocalAIApp
                             _inputPanel.SetGenerating(false);
                             var responseContent = msg.Content ?? "";
                             var responseMedia = ImportGeneratedMedia(msg.Media);
-                            _chatPanel.AddMessage("Assistant", responseContent, false, attachments: responseMedia);
                             _currentConversation.Add(new Message
                             {
                                 Role = "assistant",
@@ -1295,6 +1423,7 @@ namespace LocalAIApp
                                 Attachments = responseMedia,
                                 Timestamp = DateTime.Now
                             });
+                            _chatPanel.RenderMessages(_currentConversation);
                             SaveConversation();
                             _statusBar.SetStatus("Pret", StatusType.Success);
                             ApplyPendingUpdateWhenIdle();
@@ -1540,7 +1669,31 @@ namespace LocalAIApp
                             {
                                 _inputPanel.SetMultimodalSupport(msg.SupportsMultimodal, msg.CanAnalyzeImagesWithOmni);
                                 _statusBar.SetStatus("Modele charge: " + msg.Content, StatusType.Success);
+                                RequestLlamaCppSpeechCapabilities(_selectedModelPath);
                             }
+                            break;
+                        case "tts_voices":
+                            if (!string.IsNullOrWhiteSpace(msg.ModelPath) &&
+                                !string.IsNullOrWhiteSpace(_selectedModelPath) &&
+                                string.Equals(Path.GetFullPath(msg.ModelPath), Path.GetFullPath(_selectedModelPath), StringComparison.OrdinalIgnoreCase))
+                            {
+                                _supportsLlamaCppSpeech = msg.SupportsSpeech == true;
+                                _llamaCppVoices = msg.Voices?.ToObject<List<string>>() ?? new List<string>();
+                                _chatPanel.SetSpeechCapability(_supportsLlamaCppSpeech);
+                                if (!string.IsNullOrWhiteSpace(msg.Content))
+                                    Log("llama.cpp voice capability lookup: " + msg.Content);
+                            }
+                            break;
+                        case "tts_start":
+                            if (msg.MessageIndex is int pendingSpeechIndex)
+                                _chatPanel.SetSpeechPending(pendingSpeechIndex, true);
+                            _statusBar.SetStatus("Génération de la voix avec llama.cpp…", StatusType.Info);
+                            break;
+                        case "tts_complete":
+                            CompleteSpeechMessage(msg);
+                            break;
+                        case "tts_error":
+                            CompleteSpeechError(msg.MessageIndex ?? -1, msg.Content ?? "Erreur inconnue.");
                             break;
                         case "model_capabilities":
                             if (!string.IsNullOrWhiteSpace(msg.ModelPath) &&
@@ -1783,6 +1936,11 @@ namespace LocalAIApp
 
         private void OnSendMessage(object sender, EventArgs e)
         {
+            if (_pendingSpeechMessages.Count > 0)
+            {
+                _chatPanel.AddSystemMessage("Attendez la fin de la génération vocale avant d’envoyer un nouveau message.", MessageType.Info);
+                return;
+            }
             if (_imageGenerationActive)
             {
                 _statusBar.SetStatus("Attendez la fin de la génération d'image avant de lancer le chat.", StatusType.Warning);
@@ -2187,6 +2345,11 @@ namespace LocalAIApp
 
         private void OnConversationSelected(object sender, string filename)
         {
+            if (_pendingSpeechMessages.Count > 0)
+            {
+                _chatPanel.AddSystemMessage("Attendez la fin de la génération vocale avant d’ouvrir une autre conversation.", MessageType.Info);
+                return;
+            }
             if (_isGenerating)
             {
                 _chatPanel.AddSystemMessage("Annulez la generation avant de changer de conversation.", MessageType.Info);
@@ -2202,6 +2365,11 @@ namespace LocalAIApp
 
         private void OnNewConversation(object sender, EventArgs e)
         {
+            if (_pendingSpeechMessages.Count > 0)
+            {
+                _chatPanel.AddSystemMessage("Attendez la fin de la génération vocale avant de créer une autre conversation.", MessageType.Info);
+                return;
+            }
             if (_isGenerating)
             {
                 _chatPanel.AddSystemMessage("Annulez la generation avant de commencer une nouvelle conversation.", MessageType.Info);
@@ -2273,7 +2441,7 @@ namespace LocalAIApp
 
         private void OnSettings(object sender, EventArgs e)
         {
-            using (var settingsForm = new SettingsForm(_appSettings))
+            using (var settingsForm = new SettingsForm(_appSettings, _llamaCppVoices))
             {
                 if (settingsForm.ShowDialog(this) == DialogResult.OK)
                 {
@@ -2620,6 +2788,12 @@ namespace LocalAIApp
 
         private void StartToolModelComparison(ModelComparisonRequestedEventArgs request)
         {
+            if (_pendingSpeechMessages.Count > 0)
+            {
+                _modelComparisonForm?.SetRunning(false);
+                _modelComparisonForm?.SetStatus("Attendez la fin de la génération vocale avant de comparer les modèles.", isError: true);
+                return;
+            }
             if (!_isPythonReady)
             {
                 _modelComparisonForm?.SetRunning(false);
@@ -2834,6 +3008,11 @@ namespace LocalAIApp
 
         private void OnOpenImageGenerator(object sender, EventArgs e)
         {
+            if (_pendingSpeechMessages.Count > 0)
+            {
+                _chatPanel.AddSystemMessage("Attendez la fin de la génération vocale avant de démarrer le moteur d'images.", MessageType.Info);
+                return;
+            }
             if (!_isPythonReady)
             {
                 _statusBar.SetStatus("Le backend IA démarre encore.", StatusType.Info);
@@ -3536,6 +3715,7 @@ namespace LocalAIApp
         public string DefaultTextModelPath { get; set; } = "";
         public string DefaultImageModelPath { get; set; } = "";
         public string DefaultOmniModelPath { get; set; } = "";
+        public string LlamaCppVoice { get; set; } = "";
         public bool KeepChatModelLoadedForOmni { get; set; } = false;
         public bool UseDedicatedConversationTitleModel { get; set; } = false;
         public string ConversationTitleModelPath { get; set; } = "";
@@ -3660,6 +3840,12 @@ namespace LocalAIApp
         public bool? CanAnalyzeImagesWithOmni { get; set; }
         [JsonProperty("model_path")]
         public string ModelPath { get; set; } = "";
+        [JsonProperty("supports_speech")]
+        public bool? SupportsSpeech { get; set; }
+        public JArray Voices { get; set; }
+        public string Path { get; set; } = "";
+        [JsonProperty("message_index")]
+        public int? MessageIndex { get; set; }
         public string Stage { get; set; }
         public string Detail { get; set; }
         public string Status { get; set; }
@@ -5456,6 +5642,8 @@ namespace LocalAIApp
         private ModernTextBox _defaultTextModelPathTextBox = null!;
         private ModernTextBox _defaultImageModelPathTextBox = null!;
         private ModernTextBox _defaultOmniModelPathTextBox = null!;
+        private ComboBox _llamaCppVoiceComboBox = null!;
+        private readonly List<string> _availableLlamaCppVoices;
         private CheckBox _keepChatModelLoadedForOmniCheckBox = null!;
         private CheckBox _useDedicatedConversationTitleModelCheckBox = null!;
         private ModernTextBox _conversationTitleModelPathTextBox = null!;
@@ -5495,8 +5683,12 @@ namespace LocalAIApp
         private ModernButton _btnCancel;
         private ModernButton _btnDefaults = null!;
 
-        public SettingsForm(AppSettings currentSettings)
+        public SettingsForm(AppSettings currentSettings, IEnumerable<string>? availableLlamaCppVoices = null)
         {
+            _availableLlamaCppVoices = (availableLlamaCppVoices ?? Enumerable.Empty<string>())
+                .Where(voice => !string.IsNullOrWhiteSpace(voice))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
             Settings = new AppSettings
             {
                 SystemPrompt = currentSettings.SystemPrompt ?? "",
@@ -5504,6 +5696,7 @@ namespace LocalAIApp
                 DefaultTextModelPath = currentSettings.DefaultTextModelPath ?? "",
                 DefaultImageModelPath = currentSettings.DefaultImageModelPath ?? "",
                 DefaultOmniModelPath = currentSettings.DefaultOmniModelPath ?? "",
+                LlamaCppVoice = currentSettings.LlamaCppVoice ?? "",
                 KeepChatModelLoadedForOmni = currentSettings.KeepChatModelLoadedForOmni,
                 UseDedicatedConversationTitleModel = currentSettings.UseDedicatedConversationTitleModel,
                 ConversationTitleModelPath = currentSettings.ConversationTitleModelPath ?? "",
@@ -5678,6 +5871,23 @@ namespace LocalAIApp
                 _keepChatModelLoadedForOmniCheckBox,
                 editorBelowTitle: true,
                 height: 104));
+
+            AddSection(content, "VOIX DE LLAMA.CPP");
+            _llamaCppVoiceComboBox = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = ThemeColors.CodeBackground,
+                ForeColor = ThemeColors.TextPrimary,
+                Font = new Font("Segoe UI", 9.5f),
+                Items = { "Voix par défaut du modèle" }
+            };
+            foreach (var voice in _availableLlamaCppVoices)
+                _llamaCppVoiceComboBox.Items.Add(voice);
+            content.Controls.Add(CreateSettingCard(
+                "Voix de lecture des réponses",
+                "Choisis une voix déclarée par llama-server. Les voix disponibles sont récupérées quand un modèle compatible est chargé. Laisse la voix par défaut pour utiliser celle du modèle. Le bouton de lecture apparaît sous les réponses seulement si le modèle actif produit de l’audio.",
+                _llamaCppVoiceComboBox));
 
             AddSection(content, "RECHERCHE DES MODÈLES");
             _searchAllModelDrivesCheckBox = new CheckBox
@@ -6274,6 +6484,12 @@ namespace LocalAIApp
             _defaultTextModelPathTextBox.Text = Settings.DefaultTextModelPath ?? "";
             _defaultImageModelPathTextBox.Text = Settings.DefaultImageModelPath ?? "";
             _defaultOmniModelPathTextBox.Text = Settings.DefaultOmniModelPath ?? "";
+            var configuredVoice = (Settings.LlamaCppVoice ?? "").Trim();
+            if (configuredVoice.Length > 0 && !_llamaCppVoiceComboBox.Items.Contains(configuredVoice))
+                _llamaCppVoiceComboBox.Items.Add(configuredVoice);
+            _llamaCppVoiceComboBox.SelectedItem = configuredVoice.Length == 0
+                ? "Voix par défaut du modèle"
+                : configuredVoice;
             _keepChatModelLoadedForOmniCheckBox.Checked = Settings.KeepChatModelLoadedForOmni;
             _useDedicatedConversationTitleModelCheckBox.Checked = Settings.UseDedicatedConversationTitleModel;
             _conversationTitleModelPathTextBox.Text = Settings.ConversationTitleModelPath ?? "";
@@ -6322,6 +6538,12 @@ namespace LocalAIApp
             Settings.DefaultTextModelPath = _defaultTextModelPathTextBox.Text.Trim();
             Settings.DefaultImageModelPath = _defaultImageModelPathTextBox.Text.Trim();
             Settings.DefaultOmniModelPath = _defaultOmniModelPathTextBox.Text.Trim();
+            Settings.LlamaCppVoice = string.Equals(
+                _llamaCppVoiceComboBox.SelectedItem?.ToString(),
+                "Voix par défaut du modèle",
+                StringComparison.Ordinal)
+                    ? ""
+                    : _llamaCppVoiceComboBox.SelectedItem?.ToString() ?? "";
             Settings.KeepChatModelLoadedForOmni = _keepChatModelLoadedForOmniCheckBox.Checked;
             Settings.UseDedicatedConversationTitleModel = _useDedicatedConversationTitleModelCheckBox.Checked;
             Settings.ConversationTitleModelPath = _conversationTitleModelPathTextBox.Text.Trim();
@@ -6389,5 +6611,6 @@ namespace LocalAIApp
         }
     }
 }
+
 
 

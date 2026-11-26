@@ -302,6 +302,7 @@ class LlamaCppBackend:
         self._server_port = None
         self._server_ready = False
         self._server_config = None
+        self._tts_request_lock = threading.Lock()
         self._active_request_connection_lock = threading.Lock()
         self._active_request_connection = None
         self._active_tool_process_lock = threading.Lock()
@@ -3039,6 +3040,198 @@ class LlamaCppBackend:
         conversation_messages = [msg for msg in messages if msg["role"] != "system"][-6:]
         final_content = cls._message_content_with_media(prompt, attachments)
         return system_messages[:1] + conversation_messages + [{"role": "user", "content": final_content}]
+
+    def _get_tts_model_metadata(self):
+        """Read llama-server speech capability and predefined voices for its loaded model."""
+        with self._server_state_lock:
+            if not self._server_ready or self._server_port is None:
+                return None, [], False, ""
+            port = self._server_port
+            model_path = self.model_path or ""
+
+        def get_json(path):
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{int(port)}{path}",
+                headers={"Accept": "application/json"}
+            )
+            with urllib.request.urlopen(request, timeout=8) as response:
+                raw = response.read(1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                raise RuntimeError(f"La réponse de llama-server ({path}) dépasse 1 Mio.")
+            return json.loads(raw.decode("utf-8", errors="replace"))
+
+        props = {}
+        models = {}
+        try:
+            props = get_json("/props")
+        except Exception:
+            pass
+        try:
+            models = get_json("/v1/models")
+        except Exception:
+            pass
+
+        raw_voices = props.get("voices", []) if isinstance(props, dict) else []
+        voices = []
+        if isinstance(raw_voices, list):
+            for item in raw_voices:
+                if isinstance(item, str):
+                    voice = item.strip()
+                elif isinstance(item, dict):
+                    voice = str(item.get("id") or item.get("name") or "").strip()
+                else:
+                    voice = ""
+                if voice and voice not in voices:
+                    voices.append(voice)
+
+        output_modalities = []
+        if isinstance(models, dict):
+            model_entries = models.get("data", [])
+            if isinstance(model_entries, list):
+                for entry in model_entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    architecture = entry.get("architecture")
+                    if isinstance(architecture, dict):
+                        values = architecture.get("output_modalities", [])
+                        if isinstance(values, list):
+                            output_modalities.extend(str(value).lower() for value in values)
+
+        # Some older llama-server builds expose voices in /props but not output
+        # modality metadata in /v1/models, so either signal is sufficient.
+        supports_tts = "audio" in output_modalities or bool(voices)
+        return props, voices, supports_tts, model_path
+
+    def get_tts_voices(self):
+        try:
+            _, voices, supports_tts, model_path = self._get_tts_model_metadata()
+            self.send({
+                "type": "tts_voices",
+                "voices": voices,
+                "supports_speech": supports_tts,
+                "model_path": model_path
+            })
+        except Exception as error:
+            self.send({
+                "type": "tts_voices",
+                "voices": [],
+                "supports_speech": False,
+                "model_path": self.model_path or "",
+                "content": str(error)
+            })
+
+    @staticmethod
+    def _speech_text(value):
+        text = str(value or "")
+        text = re.sub(r"<think>.*?</think>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(r"```.*?```", " bloc de code omis. ", text, flags=re.DOTALL)
+        text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"[`*_#>|]", " ", text)
+        text = re.sub(r"^\s*[-+]\s+", "", text, flags=re.MULTILINE)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    def synthesize_speech(self, text, voice="", model_path="", timeout=900, message_index=-1):
+        if not self._tts_request_lock.acquire(blocking=False):
+            self.send({"type": "tts_error", "message_index": message_index,
+                       "content": "Une lecture vocale est déjà en cours."})
+            return
+
+        output_path = None
+        temporary_path = None
+        try:
+            try:
+                timeout = max(30, min(7200, int(timeout)))
+            except (TypeError, ValueError):
+                timeout = 900
+            speech_text = self._speech_text(text)
+            if not speech_text:
+                raise ValueError("Cette réponse ne contient pas de texte lisible à voix haute.")
+            if len(speech_text) > 20000:
+                speech_text = speech_text[:20000]
+
+            _, voices, supports_tts, active_model_path = self._get_tts_model_metadata()
+            if not active_model_path:
+                raise RuntimeError("Aucun modèle llama.cpp n'est actuellement chargé.")
+            if model_path and os.path.normcase(os.path.abspath(model_path)) != os.path.normcase(os.path.abspath(active_model_path)):
+                raise RuntimeError("Le modèle actif a changé. Sélectionnez de nouveau un modèle audio-compatible.")
+            if not supports_tts:
+                raise RuntimeError(
+                    "Le modèle chargé ne déclare pas de génération audio. "
+                    "Choisissez un modèle llama.cpp compatible TTS avec son mmproj audio, puis réessayez."
+                )
+            voice = str(voice or "").strip()
+            if voice and voices and voice not in voices:
+                raise RuntimeError(
+                    f"La voix « {voice} » n'est pas fournie par ce modèle. "
+                    "Voix disponibles : " + ", ".join(voices)
+                )
+
+            with self._server_state_lock:
+                port = self._server_port if self._server_ready else None
+            if port is None:
+                raise RuntimeError("Le serveur llama.cpp n'est plus prêt.")
+
+            payload = {
+                "model": "local-model",
+                "input": speech_text,
+                "response_format": "wav"
+            }
+            if voice:
+                payload["voice"] = voice
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{int(port)}/v1/audio/speech",
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                method="POST",
+                headers={"Content-Type": "application/json", "Accept": "audio/wav"}
+            )
+            self.send({"type": "tts_start", "message_index": message_index})
+
+            media_root = self._chat_media_directory().expanduser().resolve()
+            output_directory = media_root / "generated" / "voice"
+            output_directory.mkdir(parents=True, exist_ok=True)
+            output_path = output_directory / f"assistant-voice-{uuid.uuid4().hex}.wav"
+            temporary_path = output_path.with_suffix(".wav.part")
+            total_bytes = 0
+            with urllib.request.urlopen(request, timeout=timeout) as response, open(temporary_path, "wb") as output:
+                while True:
+                    chunk = response.read(256 * 1024)
+                    if not chunk:
+                        break
+                    total_bytes += len(chunk)
+                    if total_bytes > 64 * 1024 * 1024:
+                        raise RuntimeError("Le fichier audio dépasse la limite de 64 Mio.")
+                    output.write(chunk)
+
+            with open(temporary_path, "rb") as audio_file:
+                header = audio_file.read(12)
+            if len(header) < 12 or header[:4] not in (b"RIFF", b"RF64") or header[8:12] != b"WAVE":
+                raise RuntimeError("llama-server n'a pas renvoyé un fichier WAV lisible.")
+            os.replace(temporary_path, output_path)
+            self.send({
+                "type": "tts_complete",
+                "message_index": message_index,
+                "path": str(output_path),
+                "voice": voice
+            })
+        except urllib.error.HTTPError as error:
+            details = error.read(4096).decode("utf-8", errors="replace").strip()
+            self.send({
+                "type": "tts_error",
+                "message_index": message_index,
+                "content": f"llama.cpp a refusé la génération vocale (HTTP {error.code})" +
+                           (f" : {details}" if details else ".")
+            })
+        except Exception as error:
+            self.send({"type": "tts_error", "message_index": message_index, "content": str(error)})
+        finally:
+            if temporary_path is not None:
+                try:
+                    Path(temporary_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self._tts_request_lock.release()
 
     def _new_request_connection(self):
         with self._server_state_lock:
@@ -6442,6 +6635,26 @@ def main():
             elif req_type == "unload_model":
                 backend.unload_model()
 
+            elif req_type == "list_tts_voices":
+                t = threading.Thread(target=backend.get_tts_voices, daemon=False)
+                t.start()
+                active_threads = [thread for thread in active_threads if thread.is_alive()]
+                active_threads.append(t)
+
+            elif req_type == "synthesize_speech":
+                t = threading.Thread(
+                    target=backend.synthesize_speech,
+                    args=(request.get("content", request.get("text", "")),
+                          request.get("voice", ""),
+                          request.get("model_path", ""),
+                          request.get("timeout_seconds", 900),
+                          request.get("message_index", -1)),
+                    daemon=False
+                )
+                t.start()
+                active_threads = [thread for thread in active_threads if thread.is_alive()]
+                active_threads.append(t)
+
             elif req_type == "summarize":
                 backend.generate_conversation_title(
                     request.get("conversation_id", ""),
@@ -6479,4 +6692,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

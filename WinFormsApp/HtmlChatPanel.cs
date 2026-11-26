@@ -29,9 +29,12 @@ public sealed class ChatPanel : DoubleBufferedPanel
     private bool _documentReady;
     private bool _closing;
     private bool _browserInitializationStarted;
+    private bool _speechSupported;
+    private readonly HashSet<int> _speechPendingMessageIndices = new();
     private readonly System.Windows.Forms.Timer _initializationWatchdog = new() { Interval = 30_000 };
 
     public event Action<int>? EditMessageRequested;
+    public event Action<int>? SpeakMessageRequested;
 
     public ChatPanel()
     {
@@ -104,6 +107,27 @@ public sealed class ChatPanel : DoubleBufferedPanel
         RunScript($"window.localIA?.setHeader({ToJson(_title)}, {ToJson(_modelName)});");
     }
 
+    public void SetSpeechCapability(bool supported)
+    {
+        RunOnUi(() =>
+        {
+            _speechSupported = supported;
+            RenderAll(forceBottom: false);
+        });
+    }
+
+    public void SetSpeechPending(int conversationIndex, bool pending)
+    {
+        RunOnUi(() =>
+        {
+            if (pending)
+                _speechPendingMessageIndices.Add(conversationIndex);
+            else
+                _speechPendingMessageIndices.Remove(conversationIndex);
+            RenderAll(forceBottom: false);
+        });
+    }
+
     public void UpdateTheme()
     {
         BackColor = ThemeColors.Background;
@@ -123,6 +147,7 @@ public sealed class ChatPanel : DoubleBufferedPanel
             _isStreaming = false;
             _streamIsThinking = false;
             _pendingThinkingMarkup.Clear();
+            _speechPendingMessageIndices.Clear();
             RenderAll(forceBottom: true);
         });
     }
@@ -470,6 +495,18 @@ public sealed class ChatPanel : DoubleBufferedPanel
                         EditMessageRequested?.Invoke(conversationIndex.Value);
                     break;
                 }
+                case "readAloud":
+                {
+                    var conversationIndex = (int?)request["conversationIndex"];
+                    if (_speechSupported && conversationIndex is >= 0 &&
+                        !_speechPendingMessageIndices.Contains(conversationIndex.Value))
+                    {
+                        _speechPendingMessageIndices.Add(conversationIndex.Value);
+                        RenderAll(forceBottom: false);
+                        SpeakMessageRequested?.Invoke(conversationIndex.Value);
+                    }
+                    break;
+                }
                 case "openLink":
                     var uri = (string?)request["url"] ?? "";
                     if (Uri.TryCreate(uri, UriKind.Absolute, out var parsedUri) &&
@@ -769,6 +806,8 @@ public sealed class ChatPanel : DoubleBufferedPanel
             systemKind = SystemKind,
             streaming = IsStreaming,
             conversationIndex = ConversationIndex,
+            canSpeak = Role == "assistant" && _speechSupported && ConversationIndex >= 0,
+            speechPending = _speechPendingMessageIndices.Contains(ConversationIndex),
             attachments = Attachments.Select(attachment => new
             {
                 name = attachment.Name,
@@ -792,4 +831,5 @@ public sealed class ChatPanel : DoubleBufferedPanel
         public string Content { get; set; } = "";
     }
 }
+
 
